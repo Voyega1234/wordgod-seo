@@ -26,7 +26,7 @@ import { runWordGodPipeline } from '@/lib/pipeline/wordgodPipeline';
 export const runtime = 'nodejs';
 export const maxDuration = 300;
 
-const MAX_TARGET_COUNT = 300;
+const MAX_TARGET_COUNT = 3000;
 
 export async function POST(req: NextRequest) {
   const body = await req.json();

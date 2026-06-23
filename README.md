@@ -34,6 +34,7 @@ cp .env.example .env.local
 | `AUTH_USERNAME` | กำหนดเองได้ |
 | `AUTH_PASSWORD` | กำหนดเองได้ |
 | `GEMINI_API_KEY` | https://aistudio.google.com/app/apikey |
+| `GEMINI_MODEL` | ชื่อ Gemini model เช่น `gemini-3-flash-preview` (ไม่ใส่จะใช้ค่า default) |
 | `GOOGLE_ADS_DEVELOPER_TOKEN` | Google Ads → Tools → API Center |
 | `GOOGLE_ADS_CLIENT_ID` | Google Cloud Console → OAuth2 |
 | `GOOGLE_ADS_CLIENT_SECRET` | Google Cloud Console → OAuth2 |
@@ -86,14 +87,20 @@ AUTH_PASSWORD
 GEMINI_API_KEY
 ```
 
+Optional Gemini model override:
+
+```text
+GEMINI_MODEL=gemini-3-flash-preview
+```
+
 ถ้าต้องการ volume จริงจาก Keyword Planner ให้เพิ่ม `GOOGLE_ADS_*` ทุกตัวตาม `.env.example`
 
 ข้อจำกัดของ Vercel deployment นี้:
 
 - Pipeline API ใช้ Node.js runtime และกำหนดเวลาทำงานสูงสุด 300 วินาที
-- จำกัดการสร้างครั้งละไม่เกิน 300 keywords เพื่อให้อยู่ใน request เดียวได้อย่างเหมาะสม
+- จำกัดการสร้างครั้งละไม่เกิน 3,000 keywords; งานขนาดใหญ่มีโอกาสชน Vercel timeout ตามปริมาณ API call จริง
 - Keyword Planner cache บน Vercel อยู่ใน temporary filesystem และอาจหายเมื่อ function instance ถูกสร้างใหม่
-- หากต้องการงานเกิน 300 keywords หรือเก็บประวัติ ควรเปลี่ยนเป็น background job + database/queue
+- หากต้องการงานเกิน 3,000 keywords หรือเก็บประวัติ ควรเปลี่ยนเป็น background job + database/queue
 
 ตรวจสอบก่อน deploy:
 

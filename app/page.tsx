@@ -1,5 +1,6 @@
 'use client';
 
+import React from 'react';
 import { useState, useRef, useCallback } from 'react';
 import type { PipelineKeyword, PipelineResult } from '@/lib/pipeline/wordgodPipeline';
 import type { ClusterResult, TopicCluster } from '@/lib/skills/topicClusterSkill';
@@ -407,12 +408,12 @@ export default function Home() {
                     <span className="text-3xl font-bold tracking-tight text-white">{countLabel}</span>
                   </div>
                   <input
-                    type="range" min={5} max={300} step={5} value={topicCount}
+                    type="range" min={5} max={3000} step={5} value={topicCount}
                     onChange={e => setTopicCount(Number(e.target.value))}
                     className="w-full h-1 accent-white cursor-pointer"
                   />
                   <div className="flex justify-between text-[10px] text-zinc-700 font-mono">
-                    <span>5</span><span>50</span><span>100</span><span>200</span><span>300</span>
+                    <span>5</span><span>100</span><span>500</span><span>1,000</span><span>3,000</span>
                   </div>
                 </div>
 

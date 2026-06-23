@@ -1,10 +1,11 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-// gemini-3.5-flash pricing (USD per 1M tokens)
+// Default pricing estimate is based on gemini-3-flash-preview (USD per 1M tokens).
+// If GEMINI_MODEL is changed, update pricing constants if exact cost reporting matters.
 const PRICE_INPUT_PER_M = 0.15;
 const PRICE_OUTPUT_PER_M = 0.60;
 const USD_TO_THB = 34;
-const GEMINI_MODEL = 'gemini-3.5-flash';
+const DEFAULT_GEMINI_MODEL = 'gemini-3-flash-preview';
 
 export interface TokenUsage {
   input_tokens: number;
@@ -38,6 +39,10 @@ function getClient() {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY is not set');
   return new GoogleGenerativeAI(apiKey);
+}
+
+export function getGeminiModelName() {
+  return process.env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
 }
 
 function parseJSON(text: string) {
@@ -148,7 +153,7 @@ async function callWithGroundingMetadata(
 
 function makeGroundingModel(genAI: GoogleGenerativeAI) {
   return genAI.getGenerativeModel({
-    model: GEMINI_MODEL,
+    model: getGeminiModelName(),
     tools: [{ googleSearch: {} } as any],
   });
 }
@@ -171,7 +176,7 @@ export async function callGeminiWithGrounding(prompt: string, returnGrounding: t
 export async function callGeminiWithGrounding(prompt: string, returnGrounding?: boolean): Promise<any> {
   const genAI = getClient();
   const groundingModel = makeGroundingModel(genAI);
-  const jsonModel = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+  const jsonModel = genAI.getGenerativeModel({ model: getGeminiModelName() });
 
   if (!returnGrounding) {
     return withRetry(async () => {
@@ -206,7 +211,7 @@ export async function callGeminiWithGrounding(prompt: string, returnGrounding?: 
 
 export async function callGemini(prompt: string) {
   const genAI = getClient();
-  const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+  const model = genAI.getGenerativeModel({ model: getGeminiModelName() });
   return withRetry(async () => {
     const result = await model.generateContent(prompt);
     const usage = result.response.usageMetadata;

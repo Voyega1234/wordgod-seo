@@ -34,79 +34,38 @@ export interface TitleAiResult {
 
 // ─── Prompt ───────────────────────────────────────────────────────────────────
 
+// Opening structures to rotate so Gemini doesn't fall back to the same template
+const TITLE_OPENERS = [
+  'เปิดเผย', 'เจาะลึก', 'ไขข้อข้องใจ', 'แนะนำ', 'วิเคราะห์',
+  'คู่มือ', 'เทคนิค', 'วิธี', 'เปรียบเทียบ', 'ถอดรหัส',
+  'รู้จัก', 'เช็ก', 'ทำความเข้าใจ', 'สรุป', 'อัปเดต',
+];
+
 export function buildSeoTitleAiPrompt(
   requests: TitleRequest[],
   targetLanguage: string = 'th'
 ): string {
   const kwList = requests.map((r, i) =>
-    `${i + 1}. keyword="${r.keyword}" | volume=${r.volume} | competition=${r.competition} | intent=${r.intent} | type=${r.keyword_type} | content_type=${r.content_type}`
+    `${i + 1}|${r.keyword}|${r.intent}|${r.keyword_type}`
   ).join('\n');
 
   const sampleBusiness = requests[0];
+  // Pick a rotating set of openers to hint diversity
+  const openerHint = TITLE_OPENERS.slice(0, 8).join(', ');
 
-  return `## WordGod — SEO + AEO + AI Search Title Expert
+  return `WordGod Title Expert — ${targetLanguage === 'th' ? 'Thai' : 'English'}
+Business: ${sampleBusiness.business_context} | Category: ${sampleBusiness.category}
 
-### System Context
-Business/Site: ${sampleBusiness.business_context}
-Category: ${sampleBusiness.category}
-Language: ${targetLanguage === 'th' ? 'Thai (ภาษาไทย)' : 'English'}
-Date: ${new Date().getFullYear() + 543} (Buddhist Era) / ${new Date().getFullYear()}
+Write one SEO+AEO+AI-Search optimised H1 title per keyword. Rules:
+- Contains the exact keyword (Thai inflection OK)
+- 40–80 Thai characters
+- FORBIDDEN: ดีที่สุด, อันดับ 1, 100%, การันตี, รับประกัน, เห็นผลแน่นอน, pantip, sanook, wongnai, reddit, facebook, youtube, tiktok, blockdit, medium
+- DIVERSITY: every title must open differently — rotate openers like: ${openerHint} — never use "คืออะไร? รวมข้อควรรู้" more than once per batch
+- intent→style: informational=explain/define, commercial=compare/choose, transactional=buy/price/step, review=pros-cons, comparison=A vs B
 
-### Your Role
-You are a senior SEO + AEO + AI Search content strategist. You write H1/Title tags that:
-
-1. **SEO** — Rank on Google: keyword appears early, 50–70 chars, matches search intent, triggers clicks
-2. **AEO** — Win featured snippets & People Also Ask boxes: title is a clear question or implies a direct answer
-3. **AI Search** — Get cited by ChatGPT, Perplexity, Gemini: title is specific, factual framing, not vague; sounds like an authoritative source, not clickbait
-
-### Absolute Rules
-- FORBIDDEN words: ดีที่สุด, อันดับ 1, 100%, การันตี, เห็นผลแน่นอน, ผ่านแน่นอน, รับประกัน
-- MUST contain the exact keyword or a very close variation (Thai inflection OK)
-- Write in natural Thai — NOT AI-sounding, NOT robotic
-- Title length: 40–80 Thai characters
-- NEVER repeat the same pattern across multiple keywords — vary structure, style, framing
-- One title per keyword — pick the BEST one, no alternatives
-
-### SEO / AEO / AI Search Scoring (each 1–10)
-- **SEO score**: keyword in first 30 chars, intent match, 50–70 char length, no stuffing
-- **AEO score**: phrased as question or implies a direct factual answer, good for featured snippet
-- **AI Search score**: specific + authoritative framing, AI would cite this as a credible source
-- **CTR score**: emotional trigger or curiosity hook without clickbait or forbidden words
-
-### Intent → Title Strategy
-- informational → explain, define, what/why/how framing (good for AEO questions)
-- commercial → วิธีเลือก, ก่อนตัดสินใจ, เปรียบเทียบ (decision stage)
-- transactional → ซื้อที่ไหน, ราคา, ขั้นตอน, สั่ง
-- problem_solving → สาเหตุคืออะไร, วิธีแก้, ทำอย่างไร (great for PAA)
-- comparison → [A] vs [B], ต่างกันอย่างไร, ไหนดีกว่าสำหรับ...
-- review → รีวิว, ข้อดีข้อเสีย, ดีจริงไหม
-- checklist → ต้องรู้ X ข้อ, เช็กลิสต์, สิ่งที่ต้องเตรียม
-- price → ค่าใช้จ่าย, งบเท่าไร, เปรียบเทียบราคา
-- service_seeking → บริการ, ขั้นตอน, ใช้บริการอย่างไร
-
-### AEO Question Field
-For each keyword, also write a short natural-language question (aeo_question) that:
-- Is exactly how a user would type it into Google or ask Gemini/ChatGPT
-- Matches the keyword's intent
-- Can be answered in 1–3 sentences (makes it a featured-snippet candidate)
-- Example: keyword="วีซ่าเชงเก้น" → aeo_question="วีซ่าเชงเก้นคืออะไร และต้องใช้เอกสารอะไรบ้าง?"
-
-### Keywords to process:
+Format: index|keyword|intent|type
 ${kwList}
 
-### Return ONLY valid JSON (no markdown, no explanation):
-{
-  "titles": [
-    {
-      "keyword": "คีย์เวิร์ด",
-      "title": "SEO H1 title ภาษาไทยที่ดีที่สุดสำหรับ keyword นี้",
-      "aeo_question": "คำถามธรรมชาติที่ผู้ใช้จะถาม AI หรือ Google",
-      "seo_score": 8,
-      "aeo_score": 9,
-      "ai_search_score": 8,
-      "ctr_score": 7,
-      "notes": "เหตุผลสั้นๆ ว่าทำไม title นี้ถึงดี"
-    }
-  ]
-}`;
+Return JSON only:
+{"titles":[{"keyword":"...","title":"...","aeo_question":"...","seo_score":8,"aeo_score":8,"ai_search_score":8,"ctr_score":7,"notes":"..."}]}`;
 }

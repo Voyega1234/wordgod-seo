@@ -176,54 +176,76 @@ async function generateKeywordIdeas(
   accessToken: string,
   input: SkillInput
 ): Promise<KeywordPlannerRow[]> {
-  const seeds = input.seed_keywords || [];
+  const allSeeds = input.seed_keywords || [];
   const url = input.website_url;
   const language = resolveLanguageResource(input);
   const geoTargets = resolveGeoTargetResources(input);
   const network = input.keyword_plan_network || 'GOOGLE_SEARCH';
 
-  // Build seed payload
-  let keywordSeed: object | undefined;
-  if (seeds.length > 0 && url) {
-    keywordSeed = { keywordAndUrlSeed: { keywords: seeds, url } };
-  } else if (seeds.length > 0) {
-    keywordSeed = { keywordSeed: { keywords: seeds } };
-  } else if (url) {
-    keywordSeed = { urlSeed: { url } };
-  } else {
+  if (allSeeds.length === 0 && !url) {
     throw new GoogleAdsApiError('Must provide seed_keywords or website_url', 'INVALID_INPUT');
   }
 
-  const body = {
-    language,
-    geoTargetConstants: geoTargets,
-    keywordPlanNetwork: network,
-    includeAdultKeywords: false,
-    ...keywordSeed,
-  };
-
-  const customerId = config.loginCustomerId || config.customerId;
+  // Google Ads limit: max 20 seed keywords per request
+  const SEED_CHUNK = 20;
+  const customerId = config.customerId;
   const endpoint = `https://googleads.googleapis.com/${config.apiVersion}/customers/${customerId}:generateKeywordIdeas`;
+  const slog = (msg: string) => appendFileSync('/tmp/wordgod-metrics.log', `[Step1][${new Date().toISOString()}] ${msg}\n`);
 
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'developer-token': config.developerToken,
-      'Content-Type': 'application/json',
-      ...(config.loginCustomerId ? { 'login-customer-id': config.loginCustomerId } : {}),
-    },
-    body: JSON.stringify(body),
-  });
+  const allRows: KeywordPlannerRow[] = [];
+  const seedChunks = allSeeds.length > 0
+    ? Array.from({ length: Math.ceil(allSeeds.length / SEED_CHUNK) }, (_, i) => allSeeds.slice(i * SEED_CHUNK, (i + 1) * SEED_CHUNK))
+    : [[]]; // url-only mode: one request, no seed chunks
 
-  if (!res.ok) {
-    const errBody = await res.text();
-    handleGoogleAdsApiError(res.status, errBody);
+  for (const seedChunk of seedChunks) {
+    let keywordSeed: object;
+    if (seedChunk.length > 0 && url) {
+      keywordSeed = { keywordAndUrlSeed: { keywords: seedChunk, url } };
+    } else if (seedChunk.length > 0) {
+      keywordSeed = { keywordSeed: { keywords: seedChunk } };
+    } else {
+      keywordSeed = { urlSeed: { url } };
+    }
+
+    const body = {
+      language,
+      geoTargetConstants: geoTargets,
+      keywordPlanNetwork: network,
+      includeAdultKeywords: false,
+      ...keywordSeed,
+    };
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'developer-token': config.developerToken,
+        'Content-Type': 'application/json',
+        ...(config.loginCustomerId ? { 'login-customer-id': config.loginCustomerId } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+
+    const rawText = await res.text();
+    if (!res.ok) {
+      slog(`API error ${res.status}: ${rawText.slice(0, 400)}`);
+      handleGoogleAdsApiError(res.status, rawText);
+    }
+
+    const data = JSON.parse(rawText);
+    slog(`API ok — results: ${data.results?.length ?? 0}, seeds: ${seedChunk.slice(0,3).join(',')}`);
+    if (data.results?.length > 0) slog(`sample: ${JSON.stringify(data.results[0]).slice(0, 200)}`);
+    const rows = (data.results || []).map(mapKeywordIdeaToRow).filter((r: KeywordPlannerRow) => r.keyword);
+    allRows.push(...rows);
   }
 
-  const data = await res.json();
-  const results = data.results || [];
-  return results.map(mapKeywordIdeaToRow).filter((r: KeywordPlannerRow) => r.keyword);
+  // Deduplicate by keyword text
+  const seen = new Set<string>();
+  return allRows.filter(r => {
+    if (seen.has(r.keyword)) return false;
+    seen.add(r.keyword);
+    return true;
+  });
 }
 
 // ─── Error handler ────────────────────────────────────────────────────────────
@@ -247,24 +269,36 @@ export function handleGoogleAdsApiError(status: number, body: string): never {
 // generateKeywordHistoricalMetrics requires elevated permissions not available on this account.
 // Instead, use generateKeywordIdeas with small seed batches and filter results to only
 // keywords that exactly match the input — same endpoint as Step 1, no extra permissions needed.
+export interface MetricEntry {
+  volume: number;
+  competition: string;
+  competition_index: number;
+  source: 'exact' | 'close_variant';
+  variant_keyword?: string;  // the Planner keyword that provided volume (if close_variant)
+}
+
 export async function getHistoricalMetrics(
   keywords: string[],
   config: GoogleAdsConfig,
   accessToken: string,
   language: string = 'th',
   country: string = 'Thailand'
-): Promise<Map<string, { volume: number; competition: string; competition_index: number }>> {
-  const result = new Map<string, { volume: number; competition: string; competition_index: number }>();
+): Promise<Map<string, MetricEntry>> {
+  const result = new Map<string, MetricEntry>();
   if (keywords.length === 0) return result;
 
   const languageResource = LANGUAGE_CONSTANTS[language.toLowerCase()] || LANGUAGE_CONSTANTS['th'];
   const geoResource = GEO_TARGET_CONSTANTS[country.toLowerCase()] || GEO_TARGET_CONSTANTS['thailand'];
-  const customerId = config.loginCustomerId || config.customerId;
+  // Use client account ID in endpoint path; MCC goes in login-customer-id header only
+  const customerId = config.customerId;
   const endpoint = `https://googleads.googleapis.com/${config.apiVersion}/customers/${customerId}:generateKeywordIdeas`;
 
-  // Small batches — Planner returns ideas related to ALL seeds combined.
-  // Smaller batches = higher chance each seed appears in results.
-  const CHUNK = 5;
+  // Chunk size 10 — larger chunks give Planner more context → more relevant results
+  // but still small enough to get each seed appearing in the response
+  const CHUNK = 10;
+  const MAX_RETRIES = 2;
+  const logLine = (msg: string) => appendFileSync('/tmp/wordgod-metrics.log', `[${new Date().toISOString()}] ${msg}\n`);
+
   for (let i = 0; i < keywords.length; i += CHUNK) {
     const chunk = keywords.slice(i, i + CHUNK);
     const inputSet = new Set(chunk.map(k => k.trim().toLowerCase()));
@@ -276,27 +310,44 @@ export async function getHistoricalMetrics(
       keywordSeed: { keywords: chunk },
     };
 
-    try {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'developer-token': config.developerToken,
-          'Content-Type': 'application/json',
-          ...(config.loginCustomerId ? { 'login-customer-id': config.loginCustomerId } : {}),
-        },
-        body: JSON.stringify(body),
-      });
+    let responseText = '';
+    let success = false;
 
-      const responseText = await res.text();
-      const logLine = (msg: string) => {
-        appendFileSync('/tmp/wordgod-metrics.log', `[${new Date().toISOString()}] ${msg}\n`);
-      };
-
-      if (!res.ok) {
-        logLine(`API error ${res.status}: ${responseText.slice(0, 300)}`);
-        continue;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        if (attempt > 0) {
+          await new Promise(r => setTimeout(r, 1000 * attempt)); // 1s, 2s backoff
+          logLine(`retry attempt ${attempt} for chunk: ${chunk[0]}`);
+        }
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'developer-token': config.developerToken,
+            'Content-Type': 'application/json',
+            ...(config.loginCustomerId ? { 'login-customer-id': config.loginCustomerId } : {}),
+          },
+          body: JSON.stringify(body),
+        });
+        responseText = await res.text();
+        if (!res.ok) {
+          logLine(`API error ${res.status} (attempt ${attempt}): ${responseText.slice(0, 200)}`);
+          if (res.status === 429 || res.status >= 500) continue; // retry on rate limit / server error
+          break; // don't retry on 400/403
+        }
+        success = true;
+        break;
+      } catch (fetchErr) {
+        logLine(`fetch exception (attempt ${attempt}): ${fetchErr}`);
       }
+    }
+
+    if (!success) {
+      logLine(`chunk failed after retries, skipping: ${chunk[0]}`);
+      continue;
+    }
+
+    try {
 
       const data = JSON.parse(responseText);
       logLine(`API ok — results: ${data.results?.length ?? 0}, chunk: ${chunk.join(',').slice(0, 80)}`);
@@ -304,33 +355,74 @@ export async function getHistoricalMetrics(
         logLine(`sample item: ${JSON.stringify(data.results[0]).slice(0, 200)}`);
       }
 
+      // Build a map: plannerText → { metrics, plannerText } for all results in this batch
+      // Used for close-variant fallback after exact matching
+      const plannerResults: Array<{ plannerText: string; metrics: any }> = [];
+
       for (const item of (data.results || [])) {
         const rawText = (item.text || '').trim().toLowerCase();
-        // Planner sometimes inserts spaces between chars — normalize by removing all spaces for matching
-        const normalizedText = rawText.replace(/\s+/g, ' ');
-        // Also try close variants (original keyword without space insertion)
+        const plannerText = rawText.replace(/\s+/g, ' ');
         const closeVariants: string[] = (item.closeVariants || []).map((v: string) => v.trim().toLowerCase());
-        const allForms = [normalizedText, ...closeVariants];
-
-        // Find which input keyword this result belongs to
-        const matchedInput = [...inputSet].find(input =>
-          allForms.some(form => form === input || form.replace(/\s/g, '') === input.replace(/\s/g, ''))
-        );
-        if (!matchedInput) continue;
-
         const metrics = item.keywordIdeaMetrics || {};
         const volume = metrics.avgMonthlySearches ? parseInt(String(metrics.avgMonthlySearches), 10) : 0;
-        if (!isNaN(volume)) {
+        if (isNaN(volume) || volume < 0) continue;
+
+        plannerResults.push({ plannerText, metrics });
+
+        // ── Exact / space-normalized match ──
+        const allForms = [plannerText, ...closeVariants];
+        const matchedInput = [...inputSet].find(inp =>
+          allForms.some(form => form === inp || form.replace(/\s/g, '') === inp.replace(/\s/g, ''))
+        );
+        if (matchedInput && !result.has(matchedInput)) {
           result.set(matchedInput, {
             volume,
             competition: mapCompetition(metrics.competition),
             competition_index: parseInt(String(metrics.competitionIndex || '0'), 10),
+            source: 'exact',
           });
-          logLine(`matched: "${matchedInput}" vol=${volume}`);
+          logLine(`exact: "${matchedInput}" vol=${volume}`);
+        }
+      }
+
+      // ── Close-variant fallback for unmatched inputs ──
+      // If an input keyword didn't get an exact match, find the Planner result whose
+      // text shares the most words with the input and use its volume × 0.3 discount.
+      // This is clearly labelled 'close_variant' so the pipeline can distinguish.
+      const CLOSE_VARIANT_DISCOUNT = 0.3;
+      const MIN_SHARED_WORDS = 2; // at least 2 words must overlap
+
+      for (const inp of inputSet) {
+        if (result.has(inp)) continue; // already matched exactly
+        const inpWords = new Set(inp.split(/\s+/).filter(w => w.length > 1));
+        if (inpWords.size === 0) continue;
+
+        let bestScore = 0;
+        let bestResult: { plannerText: string; metrics: any } | null = null;
+        for (const pr of plannerResults) {
+          const prWords = pr.plannerText.split(/\s+/);
+          const shared = prWords.filter(w => inpWords.has(w)).length;
+          if (shared > bestScore) { bestScore = shared; bestResult = pr; }
+        }
+
+        if (bestResult && bestScore >= MIN_SHARED_WORDS) {
+          const rawVol = bestResult.metrics.avgMonthlySearches
+            ? parseInt(String(bestResult.metrics.avgMonthlySearches), 10) : 0;
+          if (!isNaN(rawVol) && rawVol > 0) {
+            const discountedVol = Math.round(rawVol * CLOSE_VARIANT_DISCOUNT);
+            result.set(inp, {
+              volume: discountedVol,
+              competition: mapCompetition(bestResult.metrics.competition),
+              competition_index: parseInt(String(bestResult.metrics.competitionIndex || '0'), 10),
+              source: 'close_variant',
+              variant_keyword: bestResult.plannerText,
+            });
+            logLine(`close_variant: "${inp}" ← "${bestResult.plannerText}" vol=${rawVol}×0.3=${discountedVol}`);
+          }
         }
       }
     } catch (err) {
-      appendFileSync('/tmp/wordgod-metrics.log', `[${new Date().toISOString()}] exception: ${err}\n`);
+      logLine(`parse/process exception: ${err}`);
     }
   }
 

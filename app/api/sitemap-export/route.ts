@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
   </url>`);
 
       for (const kw of cluster.supporting) {
-        const url = `${baseDomain}/${cluster.pillar.slug}/${kw.slug}/`;
+        const url = `${baseDomain}/${kw.slug}/`;
         urls.push(`  <url>
     <loc>${url}</loc>
     <lastmod>${now}</lastmod>
@@ -80,7 +80,7 @@ ${urls.join('\n')}
     ].join(','));
 
     for (const kw of cluster.supporting) {
-      const url = `${baseDomain}/${cluster.pillar.slug}/${kw.slug}/`;
+      const url = `${baseDomain}/${kw.slug}/`;
       rows.push([
         cluster.cluster_id,
         `"${cluster.cluster_name}"`,

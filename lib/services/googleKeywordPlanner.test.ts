@@ -10,6 +10,7 @@
 import {
   normalizeCustomerId,
   validateGoogleAdsConfig,
+  loadGoogleAdsConfig,
   handleGoogleAdsApiError,
   GoogleAdsApiError,
 } from './googleKeywordPlannerService';

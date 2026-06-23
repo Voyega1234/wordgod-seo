@@ -4,7 +4,7 @@ const USERNAME = process.env.AUTH_USERNAME || 'wordgod';
 const PASSWORD = process.env.AUTH_PASSWORD || '';
 
 export function proxy(req: NextRequest) {
-  // Allow local/preview access when no password is configured.
+  // Skip auth if no password configured
   if (!PASSWORD) return NextResponse.next();
 
   const auth = req.headers.get('authorization');
@@ -16,7 +16,6 @@ export function proxy(req: NextRequest) {
       const separator = decoded.indexOf(':');
       const user = separator >= 0 ? decoded.slice(0, separator) : decoded;
       const pass = separator >= 0 ? decoded.slice(separator + 1) : '';
-
       if (user === USERNAME && pass === PASSWORD) {
         return NextResponse.next();
       }

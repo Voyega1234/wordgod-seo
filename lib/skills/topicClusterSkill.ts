@@ -42,40 +42,38 @@ function sanitizeSlug(slug: string): string {
     .substring(0, 50);
 }
 
-function buildClusterPrompt(keywords: PipelineKeyword[], niche: string): string {
-  const rows = keywords.map((k, i) => `${i}|${k.keyword}|${k.volume}|${k.intent}|${k.keyword_type}`).join('\n');
-  return `You are a content strategist. Group these ${keywords.length} keywords from the "${niche}" niche into topic clusters for a content sitemap.
+function buildClusterPrompt(keywords: PipelineKeyword[], niche: string, targetGroups: number): string {
+  const rows = keywords.map((k, i) => `${i}|${k.keyword}|${k.volume}|${k.intent}`).join('\n');
+  // Extract sub-topic hints from high-volume keywords to guide clustering
+  const topKws = [...keywords].sort((a, b) => b.volume - a.volume).slice(0, 10).map(k => k.keyword);
+  return `Group ${keywords.length} "${niche}" keywords into ${targetGroups}–${Math.round(targetGroups * 1.4)} specific topic clusters.
+
+Sub-topic hints (use these to define cluster boundaries): ${topKws.join(' | ')}
 
 Rules:
-- Each cluster must have exactly ONE pillar keyword (highest traffic, broadest topic in that group)
-- Supporting keywords are related sub-topics or long-tail variations of the pillar
-- Aim for 3–12 keywords per cluster
-- cluster_name: short English phrase (2–5 words) describing the topic
-- pillar_slug: English URL slug for the pillar (translate from Thai to English, lowercase, hyphens, max 4 words, no stopwords). Example: "วีซ่านักเรียน" → "student-visa", "วิธีสมัครวีซ่าท่องเที่ยว" → "tourist-visa-apply"
-- Each supporting keyword also needs a slug: English URL slug, max 4 words, no articles/prepositions
-- Keyword index numbers are listed as the first column
-- Put truly unrelated outliers (index numbers) in "ungrouped" array with their slugs
+- Split into SPECIFIC sub-topics, not broad intent buckets
+- Each cluster = one pillar (broadest/highest-volume) + tightly related supporting keywords
+- Aim for ${targetGroups}–${Math.round(targetGroups * 1.4)} clusters — prefer more smaller clusters over few large ones
+- pillar_slug and supporting slugs: English, lowercase, hyphens, max 4 words
 
-Input format: index|keyword|volume|intent|keyword_type
+Format: index|keyword|volume|intent
 ${rows}
 
-Return ONLY valid JSON, no markdown:
-{
-  "clusters": [
-    {
-      "cluster_name": "...",
-      "pillar_index": 0,
-      "pillar_slug": "english-slug-here",
-      "supporting": [
-        { "index": 1, "slug": "english-slug" },
-        { "index": 2, "slug": "english-slug" }
-      ]
-    }
-  ],
-  "ungrouped": [
-    { "index": 5, "slug": "english-slug" }
-  ]
-}`;
+Return JSON only:
+{"clusters":[{"name":"...","pillar":0,"slug":"english-slug","supporting":[{"i":1,"slug":"slug"}]}],"ungrouped":[{"i":5,"slug":"slug"}]}`;
+}
+
+function buildClusterKeyword(kw: PipelineKeyword, slug: string, role: 'pillar' | 'supporting'): ClusterKeyword {
+  return {
+    keyword: kw.keyword,
+    title: kw.title,
+    volume: kw.volume,
+    opportunity_score: kw.opportunity_score,
+    priority: kw.priority,
+    role,
+    slug: sanitizeSlug(slug || kw.keyword),
+    aeo_question: kw.aeo_question,
+  };
 }
 
 export async function clusterKeywords(
@@ -85,7 +83,9 @@ export async function clusterKeywords(
 ): Promise<ClusterResult> {
   onProgress?.('[5/5] Clustering keywords into topic groups...');
 
-  const CHUNK = 200;
+  // Dynamic chunk size: small runs stay in one pass, large runs use bigger chunks
+  // to keep context coherent and reduce number of Gemini calls
+  const CHUNK = keywords.length <= 200 ? 200 : keywords.length <= 1000 ? 300 : 500;
   let allClusters: TopicCluster[] = [];
   let allUngrouped: ClusterKeyword[] = [];
   let clusterIdCounter = 1;
@@ -95,69 +95,35 @@ export async function clusterKeywords(
     const end = Math.min(start + CHUNK, keywords.length);
     onProgress?.(`[5/5] Clustering keywords ${start + 1}–${end}...`);
 
+    // Target ~1 cluster per 5 keywords, minimum 5, maximum 40 per chunk
+    const targetGroups = Math.min(40, Math.max(5, Math.round(chunk.length / 5)));
+
     try {
-      const prompt = buildClusterPrompt(chunk, niche);
-      const raw = await callGemini(prompt);
+      const raw = await callGemini(buildClusterPrompt(chunk, niche, targetGroups));
 
       const clusters: TopicCluster[] = (raw.clusters || []).map((c: any) => {
-        const pillarKw = chunk[c.pillar_index];
+        const pillarKw = chunk[c.pillar];
         if (!pillarKw) return null;
-
-        const pillar: ClusterKeyword = {
-          keyword: pillarKw.keyword,
-          title: pillarKw.title,
-          volume: pillarKw.volume,
-          opportunity_score: pillarKw.opportunity_score,
-          priority: pillarKw.priority,
-          role: 'pillar',
-          slug: sanitizeSlug(c.pillar_slug || pillarKw.keyword),
-          aeo_question: pillarKw.aeo_question,
-        };
-
-        const supportingMap = new Map<number, string>();
-        for (const s of (c.supporting || [])) {
-          supportingMap.set(s.index, s.slug || '');
-        }
-
-        const supporting: ClusterKeyword[] = Array.from(supportingMap.entries())
-          .map(([idx, slug]) => ({ kw: chunk[idx], slug }))
-          .filter(({ kw }) => Boolean(kw))
-          .map(({ kw, slug }) => ({
-            keyword: kw.keyword,
-            title: kw.title,
-            volume: kw.volume,
-            opportunity_score: kw.opportunity_score,
-            priority: kw.priority,
-            role: 'supporting' as const,
-            slug: sanitizeSlug(slug || kw.keyword),
-            aeo_question: kw.aeo_question,
-          }));
-
-        const total_volume = pillar.volume + supporting.reduce((s, k) => s + k.volume, 0);
-
+        const pillar = buildClusterKeyword(pillarKw, c.slug, 'pillar');
+        const supporting: ClusterKeyword[] = (c.supporting || [])
+          .map(({ i, slug }: { i: number; slug: string }) => {
+            const kw = chunk[i];
+            return kw ? buildClusterKeyword(kw, slug, 'supporting') : null;
+          })
+          .filter(Boolean);
         return {
           cluster_id: clusterIdCounter++,
-          cluster_name: c.cluster_name || `Cluster ${clusterIdCounter}`,
+          cluster_name: c.name || `Cluster ${clusterIdCounter}`,
           pillar,
           supporting,
-          total_volume,
+          total_volume: pillar.volume + supporting.reduce((s: number, k: ClusterKeyword) => s + k.volume, 0),
         };
       }).filter(Boolean);
 
       const ungrouped: ClusterKeyword[] = (raw.ungrouped || [])
-        .map(({ index, slug }: { index: number; slug: string }) => {
-          const k = chunk[index];
-          if (!k) return null;
-          return {
-            keyword: k.keyword,
-            title: k.title,
-            volume: k.volume,
-            opportunity_score: k.opportunity_score,
-            priority: k.priority,
-            role: 'supporting' as const,
-            slug: sanitizeSlug(slug || k.keyword),
-            aeo_question: k.aeo_question,
-          };
+        .map(({ i, slug }: { i: number; slug: string }) => {
+          const kw = chunk[i];
+          return kw ? buildClusterKeyword(kw, slug, 'supporting') : null;
         })
         .filter(Boolean);
 
@@ -169,7 +135,6 @@ export async function clusterKeywords(
   }
 
   allClusters.sort((a, b) => b.total_volume - a.total_volume);
-
   onProgress?.(`[5/5] Clustered into ${allClusters.length} topic groups`);
   return { clusters: allClusters, ungrouped: allUngrouped };
 }

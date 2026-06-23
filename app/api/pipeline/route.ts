@@ -30,7 +30,14 @@ const MAX_TARGET_COUNT = 300;
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { seeds, niche, businessContext, category, targetLanguage, targetCount, excludeKeywords, useKeywordPlanner, forceRefresh, intentRatio, presetKey } = body;
+  const {
+    seeds, niche, businessContext, category, targetLanguage, targetCount,
+    excludeKeywords, useKeywordPlanner, forceRefresh, intentRatio, presetKey,
+    product_or_service, target_customer, customer_problems, pain_points,
+    real_customer_questions, faq_from_sales_team, faq_from_customer_service,
+    journey_stages, strategy_mode, ai_search_optimization, website_type,
+    site_url, site_context_summary, site_categories,
+  } = body;
 
   if (!seeds || !Array.isArray(seeds) || seeds.length === 0) {
     return NextResponse.json({ error: 'seeds array required' }, { status: 400 });
@@ -60,6 +67,20 @@ export async function POST(req: NextRequest) {
         forceRefresh: !!forceRefresh,
         onProgress: (msg) => send({ type: 'log', msg }),
         signal: req.signal,
+        product_or_service: product_or_service || undefined,
+        target_customer: target_customer || undefined,
+        customer_problems: customer_problems || [],
+        pain_points: pain_points || [],
+        real_customer_questions: real_customer_questions || [],
+        faq_from_sales_team: faq_from_sales_team || [],
+        faq_from_customer_service: faq_from_customer_service || [],
+        journey_stages: journey_stages || undefined,
+        strategy_mode: strategy_mode || 'hybrid',
+        ai_search_optimization: ai_search_optimization !== false,
+        website_type: website_type || undefined,
+        site_url: site_url || undefined,
+        site_context_summary: site_context_summary || undefined,
+        site_categories: site_categories || undefined,
       });
 
       send({ type: 'done', result });

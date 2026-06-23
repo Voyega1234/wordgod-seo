@@ -38,6 +38,7 @@ ${excludeSection}
 - Prioritize keywords with real Thai search volume signals
 - Avoid brand-specific terms unless highly relevant
 - All keywords must be in Thai (unless brand name is English)
+- ABSOLUTE BAN: never generate keywords containing pantip, sanook, wongnai, reddit, quora, twitter, facebook, youtube, tiktok, blockdit, medium
 
 ### Volume Scoring
 Estimate monthly search volume based on Google Search signals:
@@ -84,10 +85,11 @@ Business: ${ctx.business_name || 'N/A'} | Category: ${ctx.category}
 1. Title MUST contain the keyword or a natural variation
 2. Write in natural Thai — NOT AI-sounding or robotic
 3. FORBIDDEN words: ดีที่สุด, อันดับ 1, 100%, การันตี, เห็นผลแน่นอน, ผ่านแน่นอน
-4. Match the search intent exactly
-5. No keyword stuffing
-6. Length: 40–100 Thai characters
-7. Vary patterns — don't use the same structure for every title
+4. ABSOLUTE BAN in title: pantip, sanook, wongnai, reddit, facebook, youtube, tiktok, blockdit, medium
+5. Match the search intent exactly
+6. No keyword stuffing
+7. Length: 40–100 Thai characters
+8. Vary patterns — don't use the same structure for every title
 
 ### Intent → Title Style
 - informational: explain what it is, benefits, how it works

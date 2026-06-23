@@ -1,6 +1,6 @@
 import type {
   BusinessContext, EnrichedKeyword, KeywordRow, KeywordType,
-  OutputMode, Priority, SearchIntent, SortBy,
+  OutputMode, Priority, SearchIntent, SortBy, VolumeSource,
   FullRow, SimpleRow,
 } from './types';
 
@@ -78,7 +78,7 @@ export function classifySearchIntent(keyword: string, ctx: BusinessContext): Sea
 }
 
 // ─── 5. KeywordTypeClassifier ─────────────────────────────────────────────────
-export function classifyKeywordType(keyword: string, _ctx: BusinessContext): KeywordType {
+export function classifyKeywordType(keyword: string, ctx: BusinessContext): KeywordType {
   const kw = keyword.toLowerCase();
   const words = kw.trim().split(/\s+/);
 
@@ -99,7 +99,7 @@ export function classifyKeywordType(keyword: string, _ctx: BusinessContext): Key
 // ─── 6. OpportunityScoringEngine ─────────────────────────────────────────────
 export function scoreKeywordOpportunity(
   kw: { keyword: string; volume: number; intent: SearchIntent; keyword_type: KeywordType },
-  _ctx: BusinessContext
+  ctx: BusinessContext
 ): { score: number; priority: Priority } {
   // Volume score (0-10 normalized to 0-100)
   const vol = kw.volume;

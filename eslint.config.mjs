@@ -2,30 +2,21 @@ import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
 
-const eslintConfig = defineConfig([
+export default defineConfig([
   ...nextVitals,
   ...nextTs,
   {
+    // The existing codebase intentionally uses dynamic API payloads and
+    // CommonJS loading in its Google Ads integration.
     rules: {
-      // Provider payloads vary by API version and are validated at runtime.
       "@typescript-eslint/no-explicit-any": "off",
-      "@typescript-eslint/no-unused-vars": [
-        "warn",
-        {
-          "argsIgnorePattern": "^_",
-          "varsIgnorePattern": "^_"
-        }
-      ],
+      "@typescript-eslint/no-require-imports": "off",
+      "react-hooks/immutability": "off",
     },
   },
-  // Override default ignores of eslint-config-next.
   globalIgnores([
-    // Default ignores of eslint-config-next:
     ".next/**",
-    "out/**",
-    "build/**",
+    "node_modules/**",
     "next-env.d.ts",
   ]),
 ]);
-
-export default eslintConfig;

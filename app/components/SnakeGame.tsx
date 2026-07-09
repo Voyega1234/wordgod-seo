@@ -37,7 +37,6 @@ export default function SnakeGame() {
     started: false,
   });
   const rafRef = useRef<number>(0);
-  const tickRef = useRef<(timestamp: number) => void>(() => {});
   const lastTickRef = useRef(0);
   const [score, setScore] = useState(0);
   const [dead, setDead] = useState(false);
@@ -116,7 +115,7 @@ export default function SnakeGame() {
     const s = stateRef.current;
     if (!s.started || s.dead) {
       draw();
-      rafRef.current = requestAnimationFrame(tickRef.current);
+      rafRef.current = requestAnimationFrame(tick);
       return;
     }
 
@@ -139,7 +138,7 @@ export default function SnakeGame() {
         s.dead = true;
         setDead(true);
         draw();
-        rafRef.current = requestAnimationFrame(tickRef.current);
+        rafRef.current = requestAnimationFrame(tick);
         return;
       }
 
@@ -147,7 +146,7 @@ export default function SnakeGame() {
         s.dead = true;
         setDead(true);
         draw();
-        rafRef.current = requestAnimationFrame(tickRef.current);
+        rafRef.current = requestAnimationFrame(tick);
         return;
       }
 
@@ -164,7 +163,7 @@ export default function SnakeGame() {
     }
 
     draw();
-    rafRef.current = requestAnimationFrame(tickRef.current);
+    rafRef.current = requestAnimationFrame(tick);
   }, [draw]);
 
   const restart = useCallback(() => {
@@ -204,8 +203,7 @@ export default function SnakeGame() {
 
   useEffect(() => {
     stateRef.current.food = spawnFood(stateRef.current.snake);
-    tickRef.current = tick;
-    rafRef.current = requestAnimationFrame(tickRef.current);
+    rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
   }, [tick]);
 

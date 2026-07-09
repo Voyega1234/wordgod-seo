@@ -1,11 +1,14 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { createVertex } from '@ai-sdk/google-vertex';
+import { getVercelOidcToken } from '@vercel/oidc';
+import { generateText } from 'ai';
+import { ExternalAccountClient } from 'google-auth-library';
 
-// Default pricing estimate is based on gemini-3-flash-preview (USD per 1M tokens).
-// If GEMINI_MODEL is changed, update pricing constants if exact cost reporting matters.
+// gemini-3.5-flash pricing (USD per 1M tokens)
 const PRICE_INPUT_PER_M = 0.15;
 const PRICE_OUTPUT_PER_M = 0.60;
 const USD_TO_THB = 34;
-const DEFAULT_GEMINI_MODEL = 'gemini-3-flash-preview';
+const GEMINI_MODEL = 'gemini-3.5-flash';
+const GEMINI_PROJECT_LABEL = 'wordgod';
 
 export interface TokenUsage {
   input_tokens: number;
@@ -13,6 +16,11 @@ export interface TokenUsage {
   total_tokens: number;
   cost_usd: number;
   cost_thb: number;
+}
+
+export interface GeminiCallOptions {
+  functionLabel?: string;
+  labels?: Record<string, string>;
 }
 
 // Accumulated across entire pipeline run
@@ -35,14 +43,81 @@ function trackUsage(inputTokens: number, outputTokens: number) {
   sessionUsage.cost_thb += cost_usd * USD_TO_THB;
 }
 
-function getClient() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY is not set');
-  return new GoogleGenerativeAI(apiKey);
+function sanitizeLabelPart(value: string, fallback: string): string {
+  const sanitized = value
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[^a-z]+/, '')
+    .slice(0, 63);
+  return sanitized || fallback;
 }
 
-export function getGeminiModelName() {
-  return process.env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
+function getRuntimeEnvironmentLabel(): string {
+  if (process.env.VERCEL_ENV) return sanitizeLabelPart(process.env.VERCEL_ENV, 'unknown');
+  return process.env.NODE_ENV === 'production' ? 'production' : 'development';
+}
+
+function buildGeminiLabels(functionLabel = 'general', extraLabels: Record<string, string> = {}) {
+  const labels: Record<string, string> = {
+    project: GEMINI_PROJECT_LABEL,
+    component: 'gemini',
+    function: sanitizeLabelPart(functionLabel, 'general'),
+    environment: getRuntimeEnvironmentLabel(),
+  };
+
+  for (const [key, value] of Object.entries(extraLabels)) {
+    const labelKey = sanitizeLabelPart(key, 'label');
+    labels[labelKey] = sanitizeLabelPart(value, 'unknown');
+  }
+
+  return labels;
+}
+
+let vertexProvider: ReturnType<typeof createVertex> | null = null;
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is not set`);
+  return value;
+}
+
+function getVertexProvider() {
+  if (vertexProvider) return vertexProvider;
+
+  const projectId = requireEnv('GCP_PROJECT_ID');
+  const projectNumber = requireEnv('GCP_PROJECT_NUMBER');
+  const serviceAccountEmail = requireEnv('GCP_SERVICE_ACCOUNT_EMAIL');
+  const poolId = requireEnv('GCP_WORKLOAD_IDENTITY_POOL_ID');
+  const providerId = requireEnv('GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID');
+  const workloadProvider = `projects/${projectNumber}/locations/global/workloadIdentityPools/${poolId}/providers/${providerId}`;
+  const audience = process.env.GCP_AUDIENCE || `//iam.googleapis.com/${workloadProvider}`;
+
+  const authClient = ExternalAccountClient.fromJSON({
+    type: 'external_account',
+    audience,
+    subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+    token_url: 'https://sts.googleapis.com/v1/token',
+    service_account_impersonation_url:
+      `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${serviceAccountEmail}:generateAccessToken`,
+    subject_token_supplier: {
+      getSubjectToken: () => process.env.GCP_AUDIENCE
+        ? getVercelOidcToken({ audience })
+        : getVercelOidcToken(),
+    },
+  });
+
+  if (!authClient) throw new Error('Failed to initialize the Google external account client');
+
+  vertexProvider = createVertex({
+    project: projectId,
+    location: process.env.GCP_LOCATION || 'global',
+    googleAuthOptions: {
+      authClient,
+      projectId,
+    },
+  });
+  return vertexProvider;
 }
 
 function parseJSON(text: string) {
@@ -105,9 +180,11 @@ export interface GroundedResult {
   grounding: GroundingMetadata;
 }
 
-function extractGroundingMetadata(aggregatedResponse: any): GroundingMetadata {
-  const candidates = aggregatedResponse?.candidates ?? [];
-  const meta = candidates[0]?.groundingMetadata ?? {};
+function extractGroundingMetadata(providerMetadata: unknown): GroundingMetadata {
+  const metadata = providerMetadata as Record<string, any> | undefined;
+  const meta = metadata?.vertex?.groundingMetadata
+    ?? metadata?.googleVertex?.groundingMetadata
+    ?? {};
 
   const webSearchQueries: string[] = meta.webSearchQueries ?? [];
   const chunks: any[] = meta.groundingChunks ?? [];
@@ -123,39 +200,22 @@ function extractGroundingMetadata(aggregatedResponse: any): GroundingMetadata {
   return { webSearchQueries, sourceUrls, sourceTitles };
 }
 
-async function callWithGroundingMetadata(
-  model: any,
-  prompt: string
-): Promise<{ text: string; grounding: GroundingMetadata }> {
-  // Streaming to get grounding metadata — SDK only populates groundingMetadata
-  // on the aggregated stream response, not on the non-streaming generateContent response.
-  const streamResult = await model.generateContentStream(prompt);
-  const chunks: any[] = [];
-  for await (const chunk of streamResult.stream) {
-    chunks.push(chunk);
-  }
-  const aggResponse = await streamResult.response;
-
-  let fullText = '';
-  for (const chunk of chunks) {
-    try { fullText += chunk.text(); } catch { /* chunk has no text part */ }
-  }
-  if (!fullText) {
-    try { fullText = aggResponse.text(); } catch { /* ignore */ }
-  }
-
-  const usage = aggResponse.usageMetadata;
-  if (usage) trackUsage(usage.promptTokenCount ?? 0, usage.candidatesTokenCount ?? 0);
-
-  const grounding = extractGroundingMetadata(aggResponse);
-  return { text: fullText, grounding };
-}
-
-function makeGroundingModel(genAI: GoogleGenerativeAI) {
-  return genAI.getGenerativeModel({
-    model: getGeminiModelName(),
-    tools: [{ googleSearch: {} } as any],
+async function generateVertexText(prompt: string, useGoogleSearch = false, options: GeminiCallOptions = {}) {
+  const vertex = getVertexProvider();
+  const result = await generateText({
+    model: vertex(GEMINI_MODEL),
+    prompt,
+    providerOptions: {
+      googleVertex: {
+        labels: buildGeminiLabels(options.functionLabel, options.labels),
+      },
+    },
+    ...(useGoogleSearch ? {
+      tools: { google_search: vertex.tools.googleSearch({}) },
+    } : {}),
   });
+  trackUsage(result.usage.inputTokens ?? 0, result.usage.outputTokens ?? 0);
+  return result;
 }
 
 // Strip JSON schema from prompt so Gemini doesn't skip Google Search.
@@ -172,35 +232,34 @@ function splitResearchPrompt(prompt: string): { researchPrompt: string; jsonSche
 }
 
 export async function callGeminiWithGrounding(prompt: string): Promise<any>;
-export async function callGeminiWithGrounding(prompt: string, returnGrounding: true): Promise<GroundedResult>;
-export async function callGeminiWithGrounding(prompt: string, returnGrounding?: boolean): Promise<any> {
-  const genAI = getClient();
-  const groundingModel = makeGroundingModel(genAI);
-  const jsonModel = genAI.getGenerativeModel({ model: getGeminiModelName() });
-
+export async function callGeminiWithGrounding(prompt: string, returnGrounding: false, options?: GeminiCallOptions): Promise<any>;
+export async function callGeminiWithGrounding(prompt: string, returnGrounding: true, options?: GeminiCallOptions): Promise<GroundedResult>;
+export async function callGeminiWithGrounding(prompt: string, returnGrounding?: boolean, options: GeminiCallOptions = {}): Promise<any> {
   if (!returnGrounding) {
     return withRetry(async () => {
-      const result = await groundingModel.generateContent(prompt);
-      const usage = result.response.usageMetadata;
-      if (usage) trackUsage(usage.promptTokenCount ?? 0, usage.candidatesTokenCount ?? 0);
-      return parseJSON(result.response.text());
+      const result = await generateVertexText(prompt, true, options);
+      return parseJSON(result.text);
     });
   }
 
   const { researchPrompt, jsonSchema } = splitResearchPrompt(prompt);
 
-  const { text: researchText, grounding } = await withRetry(() =>
-    callWithGroundingMetadata(groundingModel, researchPrompt)
-  );
+  const researchResult = await withRetry(() => generateVertexText(researchPrompt, true, {
+    ...options,
+    functionLabel: `${options.functionLabel ?? 'grounded_generation'}_research`,
+  }));
+  const researchText = researchResult.text;
+  const grounding = extractGroundingMetadata(researchResult.providerMetadata);
 
   let data: any;
   if (jsonSchema) {
     const formatPrompt = `Based on this research:\n\n${researchText}\n\nReturn ONLY valid JSON matching this schema (no markdown):\n${jsonSchema}`;
     data = await withRetry(async () => {
-      const formatResult = await jsonModel.generateContent(formatPrompt);
-      const usage2 = formatResult.response.usageMetadata;
-      if (usage2) trackUsage(usage2.promptTokenCount ?? 0, usage2.candidatesTokenCount ?? 0);
-      return parseJSON(formatResult.response.text());
+      const formatResult = await generateVertexText(formatPrompt, false, {
+        ...options,
+        functionLabel: `${options.functionLabel ?? 'grounded_generation'}_format`,
+      });
+      return parseJSON(formatResult.text);
     });
   } else {
     data = parseJSON(researchText);
@@ -209,13 +268,9 @@ export async function callGeminiWithGrounding(prompt: string, returnGrounding?: 
   return { data, grounding };
 }
 
-export async function callGemini(prompt: string) {
-  const genAI = getClient();
-  const model = genAI.getGenerativeModel({ model: getGeminiModelName() });
+export async function callGemini(prompt: string, options: GeminiCallOptions = {}) {
   return withRetry(async () => {
-    const result = await model.generateContent(prompt);
-    const usage = result.response.usageMetadata;
-    if (usage) trackUsage(usage.promptTokenCount ?? 0, usage.candidatesTokenCount ?? 0);
-    return parseJSON(result.response.text());
+    const result = await generateVertexText(prompt, false, options);
+    return parseJSON(result.text);
   });
 }

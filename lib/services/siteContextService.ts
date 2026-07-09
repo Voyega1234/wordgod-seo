@@ -288,7 +288,9 @@ Return JSON only:
 {"categories":[{"slug":"example-slug","label":"ชื่อหมวด"},{"slug":"another","label":"หมวดอื่น"}]}`;
 
   try {
-    const raw = await callGemini(prompt);
+    const raw = await callGemini(prompt, {
+      functionLabel: 'site_category_suggestion',
+    });
     const items: Array<{ slug: string; label: string }> = raw.categories || [];
     return items
       .filter(c => c.slug && c.label)

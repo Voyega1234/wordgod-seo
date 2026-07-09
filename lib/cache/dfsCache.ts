@@ -14,12 +14,10 @@
 
 import { createHash } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
 import { join } from 'path';
 import type { DFSMetric } from '../services/dataForSeoService';
 
-const CACHE_ROOT = process.env.VERCEL ? tmpdir() : join(process.cwd(), '.cache');
-const CACHE_DIR = join(CACHE_ROOT, 'dfs');
+const CACHE_DIR = join(process.cwd(), '.cache', 'dfs');
 
 export interface DFSCacheEntry {
   keyword: string;

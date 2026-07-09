@@ -1,6 +1,5 @@
 'use client';
 
-import React from 'react';
 import { useState, useRef, useCallback } from 'react';
 import type { PipelineKeyword, PipelineResult } from '@/lib/pipeline/wordgodPipeline';
 import type { ClusterResult, TopicCluster } from '@/lib/skills/topicClusterSkill';

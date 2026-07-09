@@ -62,10 +62,10 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-// DFS accepts up to 700 keywords per request, but 1 task per keyword gives
-// much better match rates for Thai long-tail keywords. Batch tasks into groups
-// of 100 per HTTP request to stay within DFS limits.
+// 1 task per keyword gives the best match rates for Thai long-tail keywords.
+// Batch 100 tasks per HTTP request; run 5 requests in parallel for throughput.
 const TASKS_PER_REQUEST = 100;
+const DFS_PARALLEL = 5;
 const MAX_RETRIES = 2;
 
 export async function getDataForSeoVolumes(
@@ -78,10 +78,11 @@ export async function getDataForSeoVolumes(
 
   const resultMap = new Map<string, DFSMetric>();
   const auth = makeBasicAuth(creds.login, creds.password);
-  // 1 task per keyword → best match for Thai keywords; batch TASKS_PER_REQUEST tasks per HTTP call
   const chunks = chunk(keywords, TASKS_PER_REQUEST);
 
-  for (const kwChunk of chunks) {
+  // Process chunks in parallel waves of DFS_PARALLEL
+  for (let w = 0; w < chunks.length; w += DFS_PARALLEL) {
+    await Promise.all(chunks.slice(w, w + DFS_PARALLEL).map(async (kwChunk) => {
     let lastError: string = '';
 
     // Build one task per keyword — DFS matches each keyword independently
@@ -165,11 +166,11 @@ export async function getDataForSeoVolumes(
       }
     }
 
-    if (lastError && resultMap.size === 0) {
-      // Log but don't throw — callers should handle empty map gracefully
+    if (lastError) {
       console.error(`[DataForSEO] chunk failed: ${lastError}`);
     }
-  }
+    })); // end Promise.all wave
+  } // end wave loop
 
   return resultMap;
 }

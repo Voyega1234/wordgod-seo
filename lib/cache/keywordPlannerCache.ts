@@ -8,12 +8,10 @@
 
 import { createHash } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
 import { join } from 'path';
 import type { KeywordPlannerRow, SkillInput } from '../skills/keyword-seo-title/types';
 
-const CACHE_ROOT = process.env.VERCEL ? tmpdir() : join(process.cwd(), '.cache');
-const CACHE_DIR = join(CACHE_ROOT, 'keyword-planner');
+const CACHE_DIR = join(process.cwd(), '.cache', 'keyword-planner');
 const TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 export interface CacheEntry {
@@ -23,7 +21,7 @@ export interface CacheEntry {
 
 export function buildCacheKey(input: SkillInput): string {
   const parts = [
-    [...(input.seed_keywords || [])].sort().join(','),
+    (input.seed_keywords || []).sort().join(','),
     input.website_url || '',
     input.target_country || 'Thailand',
     input.target_language || 'th',

@@ -11,7 +11,6 @@
 
 import type { GoogleAdsConfig, KeywordPlannerResult, KeywordPlannerRow, SkillInput } from '../skills/keyword-seo-title/types';
 import { readKeywordPlannerCache, writeKeywordPlannerCache, buildCacheKey } from '../cache/keywordPlannerCache';
-import { appendFileSync } from 'fs';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -190,6 +189,7 @@ async function generateKeywordIdeas(
   const SEED_CHUNK = 20;
   const customerId = config.customerId;
   const endpoint = `https://googleads.googleapis.com/${config.apiVersion}/customers/${customerId}:generateKeywordIdeas`;
+  const { appendFileSync } = require('fs');
   const slog = (msg: string) => appendFileSync('/tmp/wordgod-metrics.log', `[Step1][${new Date().toISOString()}] ${msg}\n`);
 
   const allRows: KeywordPlannerRow[] = [];
@@ -293,14 +293,20 @@ export async function getHistoricalMetrics(
   const customerId = config.customerId;
   const endpoint = `https://googleads.googleapis.com/${config.apiVersion}/customers/${customerId}:generateKeywordIdeas`;
 
-  // Chunk size 10 — larger chunks give Planner more context → more relevant results
-  // but still small enough to get each seed appearing in the response
-  const CHUNK = 10;
+  // Chunk size 20 — max seeds per KP request; run 5 chunks in parallel for throughput
+  const CHUNK = 20;
+  const PARALLEL = 5;
   const MAX_RETRIES = 2;
+  const { appendFileSync } = require('fs');
   const logLine = (msg: string) => appendFileSync('/tmp/wordgod-metrics.log', `[${new Date().toISOString()}] ${msg}\n`);
 
-  for (let i = 0; i < keywords.length; i += CHUNK) {
-    const chunk = keywords.slice(i, i + CHUNK);
+  const chunks: string[][] = [];
+  for (let i = 0; i < keywords.length; i += CHUNK) chunks.push(keywords.slice(i, i + CHUNK));
+
+  // Process chunks in parallel waves
+  for (let w = 0; w < chunks.length; w += PARALLEL) {
+    const wave = chunks.slice(w, w + PARALLEL);
+    await Promise.all(wave.map(async (chunk) => {
     const inputSet = new Set(chunk.map(k => k.trim().toLowerCase()));
 
     const body = {
@@ -344,19 +350,16 @@ export async function getHistoricalMetrics(
 
     if (!success) {
       logLine(`chunk failed after retries, skipping: ${chunk[0]}`);
-      continue;
+      return; // return from async callback (was: continue)
     }
 
     try {
-
       const data = JSON.parse(responseText);
       logLine(`API ok — results: ${data.results?.length ?? 0}, chunk: ${chunk.join(',').slice(0, 80)}`);
       if (data.results?.length > 0) {
         logLine(`sample item: ${JSON.stringify(data.results[0]).slice(0, 200)}`);
       }
 
-      // Build a map: plannerText → { metrics, plannerText } for all results in this batch
-      // Used for close-variant fallback after exact matching
       const plannerResults: Array<{ plannerText: string; metrics: any }> = [];
 
       for (const item of (data.results || [])) {
@@ -369,7 +372,6 @@ export async function getHistoricalMetrics(
 
         plannerResults.push({ plannerText, metrics });
 
-        // ── Exact / space-normalized match ──
         const allForms = [plannerText, ...closeVariants];
         const matchedInput = [...inputSet].find(inp =>
           allForms.some(form => form === inp || form.replace(/\s/g, '') === inp.replace(/\s/g, ''))
@@ -385,15 +387,11 @@ export async function getHistoricalMetrics(
         }
       }
 
-      // ── Close-variant fallback for unmatched inputs ──
-      // If an input keyword didn't get an exact match, find the Planner result whose
-      // text shares the most words with the input and use its volume × 0.3 discount.
-      // This is clearly labelled 'close_variant' so the pipeline can distinguish.
       const CLOSE_VARIANT_DISCOUNT = 0.3;
-      const MIN_SHARED_WORDS = 2; // at least 2 words must overlap
+      const MIN_SHARED_WORDS = 2;
 
       for (const inp of inputSet) {
-        if (result.has(inp)) continue; // already matched exactly
+        if (result.has(inp)) continue;
         const inpWords = new Set(inp.split(/\s+/).filter(w => w.length > 1));
         if (inpWords.size === 0) continue;
 
@@ -424,7 +422,8 @@ export async function getHistoricalMetrics(
     } catch (err) {
       logLine(`parse/process exception: ${err}`);
     }
-  }
+    })); // end Promise.all wave
+  } // end wave loop
 
   return result;
 }

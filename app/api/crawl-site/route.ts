@@ -5,9 +5,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { crawlSiteContext, buildSiteContextSummary } from '../../../lib/services/siteContextService';
 
-export const runtime = 'nodejs';
-export const maxDuration = 60;
-
 export async function POST(req: NextRequest) {
   const { url } = await req.json();
   if (!url || typeof url !== 'string') {

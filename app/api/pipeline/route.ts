@@ -23,10 +23,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { runWordGodPipeline } from '@/lib/pipeline/wordgodPipeline';
 
-export const runtime = 'nodejs';
-export const maxDuration = 300;
-
-const MAX_TARGET_COUNT = 3000;
+export const maxDuration = 800; // Vercel Pro max — pipeline needs long runtime for large keyword runs
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
@@ -59,7 +56,7 @@ export async function POST(req: NextRequest) {
         businessContext: businessContext || niche || 'General',
         category: category || niche || 'General',
         targetLanguage: targetLanguage || 'th',
-        targetCount: Math.min(Math.max(Number(targetCount) || 50, 5), MAX_TARGET_COUNT),
+        targetCount: Math.min(targetCount || 50, 3000),
         intentRatio: intentRatio || undefined,
         presetKey: presetKey || undefined,
         excludeKeywords: excludeKeywords || [],

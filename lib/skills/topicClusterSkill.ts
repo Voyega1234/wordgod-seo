@@ -99,7 +99,9 @@ export async function clusterKeywords(
     const targetGroups = Math.min(40, Math.max(5, Math.round(chunk.length / 5)));
 
     try {
-      const raw = await callGemini(buildClusterPrompt(chunk, niche, targetGroups));
+      const raw = await callGemini(buildClusterPrompt(chunk, niche, targetGroups), {
+        functionLabel: 'topic_clustering',
+      });
 
       const clusters: TopicCluster[] = (raw.clusters || []).map((c: any) => {
         const pillarKw = chunk[c.pillar];

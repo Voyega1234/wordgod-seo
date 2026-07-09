@@ -9,9 +9,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { runKeywordResearchSeoTitleSkill, runKeywordResearchSeoTitleSkillAsync } from '@/lib/skills/keyword-seo-title';
 import type { SkillInput } from '@/lib/skills/keyword-seo-title';
 
-export const runtime = 'nodejs';
-export const maxDuration = 300;
-
 export async function POST(req: NextRequest) {
   try {
     const input: SkillInput = await req.json();

@@ -563,7 +563,9 @@ async function expandWithGemini(
           ? `\n### WEBSITE CONTEXT (use this to keep keywords on-theme)\n${siteContextSummary}${siteCategories?.length ? `\n\nExisting site categories: ${siteCategories.join(', ')} — match keywords to these topics where possible` : ''}\n`
           : '';
         const prompt = KEYWORD_RESEARCH_PROMPT(niche, seeds[0], need, [...excludeSet], alreadyFound, intentRatio, isKnowledgeMode, problemContext) + siteSection;
-        const { data, grounding } = await callGeminiWithGrounding(prompt, true);
+        const { data, grounding } = await callGeminiWithGrounding(prompt, true, {
+          functionLabel: 'keyword_research',
+        });
         const FORUM_FILTER = /\b(pantip|sanook|wongnai|reddit|quora|twitter|facebook|youtube|tiktok|blockdit|medium)\b/i;
         allResults[bi] = (data.keywords || []).filter((k: any) => !FORUM_FILTER.test(k.keyword || ''));
         // Collect grounding metadata from every batch
@@ -833,7 +835,11 @@ async function generateAiTitles(
 
     for (let attempt = 0; attempt <= BACKOFFS.length; attempt++) {
       try {
-        const result = await callGemini(prompt);
+        const result = await callGemini(prompt, {
+          functionLabel: hasProblemContext
+            ? 'problem_first_title_generation'
+            : 'seo_title_generation',
+        });
         const titles: TitleAiResult[] = result.titles || [];
         for (const t of titles) {
           if (t.keyword) resultMap.set(normalize(t.keyword), t);
@@ -1425,15 +1431,17 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
       const p = plannerMap.get(normalize(k.keyword));
       return !p || p.volume === 0;
     });
-    if (stillNoVolume.length > 0) {
-      log(`[2.55/4] KP historical: ${stillNoVolume.length} keywords still without volume → querying Keyword Planner`);
+    // Cap at 600 — KP historical is slow; beyond this gemini estimates are good enough
+    const kpHistoricalBatch = stillNoVolume.slice(0, 600);
+    if (kpHistoricalBatch.length > 0) {
+      log(`[2.55/4] KP historical: ${kpHistoricalBatch.length}/${stillNoVolume.length} keywords → querying Keyword Planner (parallel)`);
       try {
         const { getHistoricalMetrics, loadGoogleAdsConfig, getAccessToken } = await import('../services/googleKeywordPlannerService');
         const kpConfig = loadGoogleAdsConfig();
         if (kpConfig) {
           const accessToken = await getAccessToken(kpConfig);
           const kpMetrics = await getHistoricalMetrics(
-            stillNoVolume.map(k => k.keyword),
+            kpHistoricalBatch.map(k => k.keyword),
             kpConfig,
             accessToken,
             input.targetLanguage || 'th',
@@ -1452,7 +1460,7 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
               kpHits++;
             }
           }
-          log(`[2.55/4] KP historical: ${kpHits}/${stillNoVolume.length} enriched`);
+          log(`[2.55/4] KP historical: ${kpHits}/${kpHistoricalBatch.length} enriched`);
         }
       } catch (err: any) {
         log(`[2.55/4] KP historical error: ${err.message}`);

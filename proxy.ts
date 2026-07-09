@@ -13,9 +13,7 @@ export function proxy(req: NextRequest) {
     const [scheme, encoded] = auth.split(' ');
     if (scheme === 'Basic' && encoded) {
       const decoded = Buffer.from(encoded, 'base64').toString('utf-8');
-      const separator = decoded.indexOf(':');
-      const user = separator >= 0 ? decoded.slice(0, separator) : decoded;
-      const pass = separator >= 0 ? decoded.slice(separator + 1) : '';
+      const [user, pass] = decoded.split(':');
       if (user === USERNAME && pass === PASSWORD) {
         return NextResponse.next();
       }
@@ -26,7 +24,6 @@ export function proxy(req: NextRequest) {
     status: 401,
     headers: {
       'WWW-Authenticate': 'Basic realm="WordGod"',
-      'Cache-Control': 'no-store',
     },
   });
 }

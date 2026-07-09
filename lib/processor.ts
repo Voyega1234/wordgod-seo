@@ -75,7 +75,9 @@ export async function fetchUniqueKeywords(
 
     try {
       const prompt = KEYWORD_RESEARCH_PROMPT(niche, seedKeyword, need, excludeKeywords, alreadyFound);
-      const result = await callGeminiWithGrounding(prompt);
+      const result = await callGeminiWithGrounding(prompt, false, {
+        functionLabel: 'legacy_keyword_research',
+      });
       const batch: KeywordResult[] = result.keywords || [];
 
       let added = 0;
@@ -152,7 +154,9 @@ export async function processRow(
   let titleData: TitleResult = { title: seedTitle, ctr_score: 5, seo_score: 5, readability: 5, notes: 'Fallback' };
   try {
     const prompt = SEO_TITLE_PROMPT(best.keyword, niche, best.intent, best.content_type);
-    titleData = await callGemini(prompt);
+    titleData = await callGemini(prompt, {
+      functionLabel: 'legacy_title_generation',
+    });
   } catch (err: any) {
     onProgress(`Title generation failed: ${err.message}`);
   }

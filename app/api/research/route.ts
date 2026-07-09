@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { processRow } from '@/lib/processor';
 
-export const runtime = 'nodejs';
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 export async function POST(req: NextRequest) {
   const { rows, niche, keywordCount, excludeKeywords } = await req.json();

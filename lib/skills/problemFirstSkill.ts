@@ -152,7 +152,9 @@ export async function runCustomerProblemDiscoveryEngine(
 ): Promise<ProblemDiscoveryResult> {
   try {
     const prompt = buildDiscoveryPrompt(ctx);
-    const { data, grounding } = await callGeminiWithGrounding(prompt, true);
+    const { data, grounding } = await callGeminiWithGrounding(prompt, true, {
+      functionLabel: 'problem_discovery',
+    });
     const problems = (data.problems || []).filter((p: any) => p.problem_statement && p.keywords_to_expand?.length > 0);
     return {
       problems,
@@ -279,7 +281,9 @@ export async function runProblemToKeywordExpander(
       try {
         const exclude = [...excludeSet].slice(0, 100);
         const prompt = buildProblemExpansionPrompt(batch, niche, batch.length * 5, exclude);
-        const { data, grounding } = await callGeminiWithGrounding(prompt, true);
+        const { data, grounding } = await callGeminiWithGrounding(prompt, true, {
+          functionLabel: 'problem_keyword_expansion',
+        });
         for (const q of grounding.webSearchQueries) {
           if (!allGroundingQueries.includes(q)) allGroundingQueries.push(q);
         }

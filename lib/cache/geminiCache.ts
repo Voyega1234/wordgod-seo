@@ -9,12 +9,10 @@
 
 import { createHash } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
 import { join } from 'path';
 import type { IntentRatio } from '../skills/intentRatioSkill';
 
-const CACHE_ROOT = process.env.VERCEL ? tmpdir() : join(process.cwd(), '.cache');
-const CACHE_DIR = join(CACHE_ROOT, 'gemini');
+const CACHE_DIR = join(process.cwd(), '.cache', 'gemini');
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export interface GeminiCacheEntry {

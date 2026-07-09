@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'nodejs';
-
 const THAI_HOLIDAYS: Record<string, string> = {
   '01-01': 'วันขึ้นปีใหม่',
   '04-06': 'วันจักรี',

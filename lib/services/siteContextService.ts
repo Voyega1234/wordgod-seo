@@ -176,6 +176,60 @@ function findKeyPages(urls: string[], baseUrl: string): string[] {
   return found.slice(0, 12);
 }
 
+// ─── Link-crawl fallback (no sitemap) ─────────────────────────────────────────
+
+// Extract same-origin, content-like links from a page. Skips assets, anchors,
+// mailto/tel/javascript, and off-origin links. Query/hash are stripped so the
+// same page discovered via different links dedupes to one entry.
+function extractSameOriginLinks(html: string, pageUrl: string, origin: string): string[] {
+  const links = new Set<string>();
+  for (const m of html.matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"']+)["']/gi)) {
+    const raw = m[1].trim();
+    if (!raw || /^(mailto:|tel:|javascript:|#)/i.test(raw)) continue;
+    try {
+      const abs = new URL(raw, pageUrl.endsWith('/') ? pageUrl : pageUrl + '/');
+      if (abs.origin !== origin) continue;
+      if (/\.(jpe?g|png|gif|svg|webp|css|js|pdf|zip|mp4|mp3|ico|woff2?|ttf|eot|xml|json)$/i.test(abs.pathname)) continue;
+      abs.hash = '';
+      abs.search = '';
+      links.add(abs.toString().replace(/\/$/, ''));
+    } catch { /* malformed href */ }
+  }
+  return [...links];
+}
+
+// Breadth-first crawl from the home page, bounded by page count and a time
+// budget. Used when no sitemap exists (redirect-heavy sites, SPAs) so the
+// pipeline still receives real category structure instead of 0 pages.
+async function discoverViaBfs(baseUrl: string, origin: string, maxPages = 60, budgetMs = 15000): Promise<string[]> {
+  const start = Date.now();
+  const visited = new Set<string>([baseUrl]);
+  const discovered: string[] = [baseUrl];
+  const frontier: { url: string; depth: number }[] = [{ url: baseUrl, depth: 0 }];
+  const maxDepth = 2;
+
+  while (frontier.length > 0) {
+    if (discovered.length >= maxPages) break;
+    if (Date.now() - start > budgetMs) break;
+
+    const { url, depth } = frontier.shift()!;
+    if (depth >= maxDepth) continue;
+
+    const html = await safeFetch(url, 6000);
+    if (!html) continue;
+
+    for (const link of extractSameOriginLinks(html, url, origin)) {
+      if (visited.has(link)) continue;
+      visited.add(link);
+      discovered.push(link);
+      frontier.push({ url: link, depth: depth + 1 });
+      if (discovered.length >= maxPages) break;
+    }
+  }
+
+  return discovered;
+}
+
 // ─── Main function ────────────────────────────────────────────────────────────
 
 export async function crawlSiteContext(rawUrl: string): Promise<SiteContext> {
@@ -227,15 +281,43 @@ export async function crawlSiteContext(rawUrl: string): Promise<SiteContext> {
       .join(' ')
       .slice(0, 3000);
   } else {
-    // No sitemap — try scraping home page directly
-    result.crawl_error = 'Sitemap not found — scraped home page only';
-    const html = await safeFetch(baseUrl, 8000);
-    if (html) {
-      const title = extractTitle(html);
-      const snippet = extractTextFromHtml(html, 2000);
-      result.key_pages = [{ url: baseUrl, title, snippet }];
-      result.business_name = title.split(/[|\-–]/)[0].trim();
-      result.business_description = snippet;
+    // No sitemap — fall back to a bounded link crawl (BFS) from the home page.
+    // Redirect-heavy sites (e.g. everything → /th/) and SPAs often expose no
+    // sitemap; without this the crawl returned 0 pages / 0 categories.
+    const origin = (() => { try { return new URL(baseUrl).origin; } catch { return baseUrl; } })();
+    const bfsUrls = await discoverViaBfs(baseUrl, origin);
+
+    if (bfsUrls.length > 1) {
+      result.crawl_error = 'Sitemap not found — discovered pages via link crawl (BFS)';
+      result.page_count = bfsUrls.length;
+      result.categories = extractCategories(bfsUrls, baseUrl);
+
+      const keyPageUrls = findKeyPages(bfsUrls, baseUrl);
+      const scrapedPages = await Promise.all(
+        keyPageUrls.map(async (url) => {
+          const html = await safeFetch(url, 8000);
+          if (!html) return null;
+          return { url, title: extractTitle(html), snippet: extractTextFromHtml(html, 1500) };
+        })
+      );
+      result.key_pages = scrapedPages.filter(Boolean) as SiteContext['key_pages'];
+
+      const homePage = result.key_pages.find(p => {
+        try { const path = new URL(p.url).pathname; return path === '/' || path === ''; } catch { return false; }
+      }) ?? result.key_pages[0];
+      if (homePage?.title) result.business_name = homePage.title.split(/[|\-–]/)[0].trim();
+      result.business_description = result.key_pages.map(p => p.snippet).join(' ').slice(0, 3000);
+    } else {
+      // BFS found nothing either — last resort: scrape the home page alone.
+      result.crawl_error = 'Sitemap not found and link crawl returned no pages — scraped home page only';
+      const html = await safeFetch(baseUrl, 8000);
+      if (html) {
+        const title = extractTitle(html);
+        const snippet = extractTextFromHtml(html, 2000);
+        result.key_pages = [{ url: baseUrl, title, snippet }];
+        result.business_name = title.split(/[|\-–]/)[0].trim();
+        result.business_description = snippet;
+      }
     }
   }
 

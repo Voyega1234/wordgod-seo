@@ -1,5 +1,5 @@
 import type { ClusterResult } from '../skills/topicClusterSkill';
-import { tokenSimilarity } from '../text/thai';
+import { tokenSimilarity, slugifyLatin } from '../text/thai';
 
 export type PlanMode = 'quick_research' | 'full_plan';
 export type ContentPriority = 'P1' | 'P2' | 'P3';
@@ -148,13 +148,11 @@ function normalize(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+// URL slugs must be Latin. The previous `\p{L}` filter kept Thai consonants but
+// dropped the vowel/tone marks (Unicode Mn), turning "สมัครบัตร" into the
+// unreadable "สม-คร-บ-ตร". slugifyLatin transliterates via RTGS instead.
 function slugify(value: string): string {
-  return value
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 90) || 'content';
+  return slugifyLatin(value, 90) || 'content';
 }
 
 function joinUrl(base: string | undefined, slug: string): string {
@@ -222,19 +220,32 @@ function businessDates(month: string, count: number): string[] {
   });
 }
 
-function buildClusterLookup(clusters: ClusterResult): Map<string, { name: string; pillarKeyword: string; isPillar: boolean }> {
-  const lookup = new Map<string, { name: string; pillarKeyword: string; isPillar: boolean }>();
+interface ClusterMeta {
+  name: string;
+  pillarKeyword: string;
+  isPillar: boolean;
+  slug: string;         // English slug from Gemini (already sanitized)
+  pillarSlug: string;   // hub slug this keyword links up to
+}
+
+function buildClusterLookup(clusters: ClusterResult): Map<string, ClusterMeta> {
+  const lookup = new Map<string, ClusterMeta>();
   for (const cluster of clusters.clusters) {
+    const pillarSlug = cluster.pillar.slug;
     lookup.set(normalize(cluster.pillar.keyword), {
       name: cluster.cluster_name,
       pillarKeyword: cluster.pillar.keyword,
       isPillar: true,
+      slug: cluster.pillar.slug,
+      pillarSlug,
     });
     for (const supporting of cluster.supporting) {
       lookup.set(normalize(supporting.keyword), {
         name: cluster.cluster_name,
         pillarKeyword: cluster.pillar.keyword,
         isPillar: false,
+        slug: supporting.slug,
+        pillarSlug,
       });
     }
   }
@@ -300,9 +311,11 @@ export function buildContentPlan(
     const cluster = clusterLookup.get(normalize(keyword.keyword));
     const explicit = chooseExplicitPillar(keyword, explicitPillars);
     const pillar = explicit?.name || cluster?.name || keyword.parent_topic || keyword.keyword_group || config.niche;
-    const pillarSlug = slugify(explicit?.seed || cluster?.pillarKeyword || pillar);
+    const pillarSlug = cluster?.pillarSlug || slugify(explicit?.seed || cluster?.pillarKeyword || pillar);
     const moneyPage = explicit?.moneyPage || (keyword.money_page_opportunity ? joinUrl(config.siteUrl, pillarSlug) : '');
-    const slug = slugify(keyword.keyword);
+    // Slug chain: Gemini English slug (from clustering) → RTGS transliteration.
+    // Never the raw Thai keyword, which produced broken URL paths before.
+    const slug = cluster?.slug || slugify(keyword.keyword);
     const type = contentTypeForKeyword(keyword, cluster?.isPillar ?? false);
 
     return {

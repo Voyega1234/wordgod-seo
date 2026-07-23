@@ -6,7 +6,7 @@ import { authorizeApiRequest } from '@/lib/auth/access';
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
-  const denied = await authorizeApiRequest();
+  const denied = await authorizeApiRequest(req);
   if (denied) return denied;
 
   const result = await req.json() as PipelineResult;
@@ -26,3 +26,4 @@ export async function POST(req: NextRequest) {
     },
   });
 }
+

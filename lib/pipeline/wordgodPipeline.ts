@@ -49,7 +49,7 @@ import type { AEOFields } from '../skills/aeoSkill';
 import { scoreCompetitorGap } from '../skills/competitorGapSkill';
 import { detectTrendSignal } from '../skills/trendSkill';
 import type { TrendType } from '../skills/trendSkill';
-import { countWords, segmentWords, tokenSimilarity } from '../text/thai';
+import { countWords, segmentWords, tokenSimilarity, keywordTokens, containsThai } from '../text/thai';
 import { scoreTitle } from './titleScoring';
 import { buildContentPlan } from '../planning/contentPlan';
 import type { ContentPlanResult, PlanMode, PlanPillarInput } from '../planning/contentPlan';
@@ -290,16 +290,56 @@ function normalize(kw: string) {
 
 function classifyIntent(keyword: string): string {
   const kw = keyword.toLowerCase();
-  if (/ราคา|ค่า|เท่าไร/.test(kw)) return 'price';
-  if (/เปรียบเทียบ|vs\.|ดีกว่า|ต่างกัน|ไหนดี/.test(kw)) return 'comparison';
-  if (/รีวิว|review|ดีไหม/.test(kw)) return 'review';
-  if (/ซื้อ|สั่ง|จอง/.test(kw)) return 'transactional';
-  if (/บริการ|รับจัด|agency/.test(kw)) return 'service_seeking';
-  if (/แก้|รักษา|ป้องกัน|วิธีแก้|ปัญหา/.test(kw)) return 'problem_solving';
-  if (/วิธีเลือก|ก่อนซื้อ|แนะนำ|ควรรู้/.test(kw)) return 'commercial';
-  if (/เช็คลิสต์|checklist|รายการ/.test(kw)) return 'checklist';
-  if (/คืออะไร|หมายถึง|คือ|ทำไม|วิธี/.test(kw)) return 'informational';
+  // Thai + English signals in one pass. KP keywords arrive here (bypassing
+  // Gemini), so English patterns are needed or every KP term defaults to
+  // "informational" — which flattened the whole plan to TOFU before.
+  if (/ราคา|ค่า|เท่าไร|กี่บาท|โปรโมชั่น|ส่วนลด|\bprice\b|\bcost\b|\bcheap\b|\bfee\b|\brate\b/.test(kw)) return 'price';
+  if (/เปรียบเทียบ|vs\.?|ดีกว่า|ต่างกัน|ไหนดี|อันไหน|เทียบ|\bcompare\b|\bversus\b|\bvs\b|\bbest\b|\bbetter\b|\bwhich\b/.test(kw)) return 'comparison';
+  if (/รีวิว|review|ดีไหม|น่าเชื่อถือ|\bpantip\b|\brating\b/.test(kw)) return 'review';
+  if (/ซื้อ|สั่ง|จอง|สมัคร|เปิดบัญชี|ดาวน์โหลด|\bbuy\b|\border\b|\bapply\b|\bsign ?up\b|\bregister\b|\bdownload\b|\bopen account\b/.test(kw)) return 'transactional';
+  if (/บริการ|รับจัด|agency|\bservice\b|\bnear me\b|\bใกล้ฉัน\b|ใกล้ฉัน/.test(kw)) return 'service_seeking';
+  if (/แก้|รักษา|ป้องกัน|วิธีแก้|ปัญหา|ถูกระงับ|ไม่ได้|error|\bfix\b|\bproblem\b|\bnot working\b|\btroubleshoot\b/.test(kw)) return 'problem_solving';
+  if (/วิธีเลือก|ก่อนซื้อ|แนะนำ|ควรรู้|เลือกยังไง|\bhow to choose\b|\bguide\b|\btips\b|\brecommend/.test(kw)) return 'commercial';
+  if (/เช็คลิสต์|checklist|รายการ|\bcheck ?list\b/.test(kw)) return 'checklist';
+  if (/คืออะไร|หมายถึง|คือ|ทำไม|วิธี|ยังไง|\bwhat is\b|\bwhat's\b|\bhow\b|\bwhy\b|\bmeaning\b|\bคือ\b/.test(kw)) return 'informational';
   return 'informational';
+}
+
+// Google Keyword Planner expands a seed into semantically-adjacent ideas, some
+// of which are off-topic (seed "line bk" pulled in "burger king", "mcdonald").
+// Gemini is meant to filter these, but when it is down every KP idea passes
+// straight through. This gate is the deterministic backstop.
+
+// Scripts we never keep: a Thai-market brand plan should not carry Spanish,
+// Cyrillic, Arabic, CJK, etc. Allow Thai, Latin, digits, and common symbols.
+const NON_TARGET_SCRIPT = /[^฀-๿ -ɏ -⁯\s]/;
+const SPANISH_LOCALE_HINT = /\b(cerca de|más|para llevar|precio|sucursal|comida|dónde|cómo)\b|[ñáéíóúü¿¡]/i;
+
+function buildRelevanceAnchors(seeds: string[], niche: string, siteContext?: string): Set<string> {
+  const anchors = new Set<string>();
+  const add = (text: string) => {
+    for (const tok of keywordTokens(text, containsThai(text) ? 'th' : 'en')) anchors.add(tok);
+  };
+  for (const seed of seeds) add(seed);
+  add(niche);
+  if (siteContext) add(siteContext);
+  return anchors;
+}
+
+/**
+ * A KP keyword is on-topic if it shares at least one meaningful token with the
+ * seed/niche/site vocabulary. Off-script and locale-foreign keywords are always
+ * rejected. Returns a reason string when rejected, or null when the keyword passes.
+ */
+function offTopicReason(keyword: string, anchors: Set<string>): string | null {
+  if (NON_TARGET_SCRIPT.test(keyword)) return 'non-target script';
+  if (SPANISH_LOCALE_HINT.test(keyword)) return 'foreign-locale term';
+  if (anchors.size === 0) return null; // no anchors to compare against — keep
+  const tokens = keywordTokens(keyword, containsThai(keyword) ? 'th' : 'en');
+  for (const tok of tokens) {
+    if (anchors.has(tok)) return null; // shares vocabulary with the niche
+  }
+  return 'no overlap with niche vocabulary';
 }
 
 function classifyKeywordType(keyword: string): string {
@@ -630,6 +670,13 @@ async function expandWithGemini(
 
   onProgress(`WordGod: running ${totalBatches} keyword batches (${PARALLEL} parallel, ${BATCH}/batch)...`);
 
+  // Track batch failures so we can fail loud if Gemini is entirely down
+  // (e.g. GCP_PROJECT_ID unset). Silently swallowing every batch produced a
+  // "successful" plan built purely from rule-based fallbacks that still
+  // reported QA PASS — the exact failure mode we are guarding against.
+  let batchErrorCount = 0;
+  let lastBatchError = '';
+
   // Run in parallel waves
   for (let wave = 0; wave < totalBatches; wave += PARALLEL) {
     const waveIndexes = Array.from({ length: Math.min(PARALLEL, totalBatches - wave) }, (_, i) => wave + i);
@@ -662,8 +709,20 @@ async function expandWithGemini(
       } catch (err: any) {
         onProgress(`WordGod batch ${bi + 1} error: ${err.message}`);
         allResults[bi] = [];
+        batchErrorCount++;
+        lastBatchError = err?.message ?? String(err);
       }
     }));
+  }
+
+  // Fail loud if EVERY batch failed — the AI layer is down (bad/missing GCP
+  // credentials, quota, network). Returning a rule-based fallback here is what
+  // produced the "burger king / all-informational / QA PASS" garbage plan.
+  if (batchErrorCount === totalBatches && totalBatches > 0) {
+    throw new Error(
+      `Gemini keyword expansion failed on all ${totalBatches} batches — aborting instead of emitting a low-quality fallback plan. ` +
+      `Check GCP_PROJECT_ID / Vercel OIDC credentials. Last error: ${lastBatchError || 'unknown'}`
+    );
   }
 
   // Merge, deduplicate, classify
@@ -1347,10 +1406,25 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
     const kpPoolSet = new Set<string>();
     const userExcludeSet = new Set<string>((input.excludeKeywords || []).map(normalize));
     let kpDirectCount = 0;
+    let kpOffTopicCount = 0;
+    const offTopicSamples: string[] = [];
+    // Relevance anchors: seed + niche + crawled site vocabulary. KP ideas that
+    // share no token with this set (e.g. "burger king") are dropped.
+    const relevanceAnchors = buildRelevanceAnchors(
+      [...userSuppliedSeeds, ...expandedSeeds],
+      input.niche,
+      resolvedSiteContextSummary
+    );
     const FORUM_BLOCK = /\b(pantip|sanook|wongnai|reddit|quora|twitter|facebook|youtube|tiktok|blockdit|medium)\b/i;
     for (const [kpKey, kpData] of plannerMap.entries()) {
       if (kpData.volume === 0) continue;
       if (FORUM_BLOCK.test(kpKey)) continue; // block forum/aggregator keywords
+      const reason = offTopicReason(kpKey, relevanceAnchors);
+      if (reason) {
+        kpOffTopicCount++;
+        if (offTopicSamples.length < 8) offTopicSamples.push(`${kpKey} (${reason})`);
+        continue;
+      }
       // Only skip if user explicitly excluded this keyword — seeds are in excludeSet
       // too but KP keywords with real volume must always be injected into the pool
       if (userExcludeSet.has(kpKey)) continue;
@@ -1380,6 +1454,10 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
     const kpSeedTexts = plannerDirectPool.slice(0, 30).map(k => k.keyword);
     if (kpSeedTexts.length > 0) input = { ...input, seeds: [...input.seeds, ...kpSeedTexts] };
     if (kpDirectCount > 0) log(`[1/4] Queued ${kpDirectCount} KP keywords for direct pool injection (will merge with real volume)`);
+    if (kpOffTopicCount > 0) {
+      log(`[1/4] Filtered ${kpOffTopicCount} off-topic KP keywords: ${offTopicSamples.join(', ')}`);
+      warnings.push(`กรองคีย์เวิร์ดนอกหัวข้อออก ${kpOffTopicCount} รายการ (เช่น ${offTopicSamples.slice(0, 3).join(', ')})`);
+    }
   } else {
     log('[1/4] Keyword Planner: credentials not configured — direct KP metrics unavailable');
     warnings.push('GOOGLE_ADS_* credentials not set — unmatched Volume/CPC will remain blank');

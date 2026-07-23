@@ -2,17 +2,14 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { isAllowedCorporateEmail } from '@/lib/auth/domain';
 import { createClient } from '@/lib/supabase/server';
 
-function safeNextUrl(value: string | null, origin: string): URL {
-  if (!value?.startsWith('/')) return new URL('/', origin);
-
-  const target = new URL(value, origin);
-  return target.origin === origin ? target : new URL('/', origin);
+function safeNextPath(value: string | null): string {
+  return value?.startsWith('/') && !value.startsWith('//') ? value : '/';
 }
 
 export async function GET(request: NextRequest) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get('code');
-  const nextUrl = safeNextUrl(requestUrl.searchParams.get('next'), requestUrl.origin);
+  const next = safeNextPath(requestUrl.searchParams.get('next'));
   const supabase = await createClient();
 
   if (!code) {
@@ -21,7 +18,7 @@ export async function GET(request: NextRequest) {
 
   const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
   if (exchangeError) {
-    return NextResponse.redirect(new URL('/login?error=email_callback', requestUrl.origin));
+    return NextResponse.redirect(new URL('/login?error=oauth_callback', requestUrl.origin));
   }
 
   const { data, error: claimsError } = await supabase.auth.getClaims();
@@ -36,5 +33,5 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL('/unauthorized', requestUrl.origin));
   }
 
-  return NextResponse.redirect(nextUrl);
+  return NextResponse.redirect(new URL(next, requestUrl.origin));
 }

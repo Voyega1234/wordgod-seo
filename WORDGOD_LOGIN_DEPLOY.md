@@ -17,8 +17,8 @@ Supabase (project WordGod) → **SQL Editor** → วางไฟล์ `wordgod
 ## ขั้นที่ 2 — ตั้งค่า Supabase Auth
 
 **Authentication → Providers**
-- เปิด **Email provider**
-- ตรวจว่า Magic Link email template ใช้ `{{ .ConfirmationURL }}`
+- เปิด provider ที่จะใช้ (Google หรือ Email) แล้วใส่ credential ให้ครบ
+- ถ้าใช้ Google OAuth: ใส่ Google **Client ID + Secret**
 
 **Authentication → URL Configuration**
 - Site URL: `https://wordgod-seo.vercel.app`
@@ -27,6 +27,12 @@ Supabase (project WordGod) → **SQL Editor** → วางไฟล์ `wordgod
   https://wordgod-seo.vercel.app/auth/callback
   http://localhost:3030/auth/callback
   ```
+
+**(ถ้าใช้ Google) Google Cloud Console → OAuth client**
+- Authorized redirect URI: `https://<SUPABASE_PROJECT_REF>.supabase.co/auth/v1/callback`
+- Authorized JavaScript origin: `https://wordgod-seo.vercel.app`
+
+---
 
 ## ขั้นที่ 3 — ตั้ง Environment Variables บน Vercel
 
@@ -37,7 +43,8 @@ NEXT_PUBLIC_SUPABASE_URL=https://<SUPABASE_PROJECT_REF>.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable key จาก Supabase → Project Settings → API>
 ```
 
-- ถ้าไม่ตั้ง 2 ตัวนี้ production จะ fail-closed 503 (เข้าไม่ได้)
+- ถ้าไม่ตั้ง 2 ตัวนี้ ระบบจะถอยไปใช้ Basic Auth และ production จะ fail-closed 503 (เข้าไม่ได้)
+- คง `AUTH_PASSWORD` ไว้เป็น fallback
 - **ห้ามใส่ `GEMINI_API_KEY`** — Gemini ใช้ Vercel OIDC (`GCP_*`) ตามเดิม ห้ามแก้
 
 ---

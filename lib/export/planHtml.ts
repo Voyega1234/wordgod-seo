@@ -176,10 +176,12 @@ export function buildPlanHtml(result: PipelineResult): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
 <style>
-  :root { --green:#00B900; --dark:#087A36; --text:#183028; --muted:#60756D; --border:#D9E2DC;
-          --lgreen:#EAF8EE; --lblue:#EAF2FF; --lred:#FDECEC; }
+  /* Corporate blue — matches the workbook palette in planWorkbook.ts.
+     P2 uses a neutral slate so it stays readable next to the blue P3 tint. */
+  :root { --brand:#1D4ED8; --dark:#1E3A8A; --text:#1E293B; --muted:#64748B; --border:#DDE3EA;
+          --lbrand:#EFF6FF; --lslate:#F1F5F9; --lred:#FDECEC; }
   * { box-sizing: border-box; }
-  body { margin:0; background:#f7faf8; color:var(--text);
+  body { margin:0; background:#F7F9FC; color:var(--text);
          font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans Thai","Sarabun",Tahoma,sans-serif;
          font-size:13px; line-height:1.5; }
   header { background:var(--dark); color:#fff; padding:20px 28px; }
@@ -191,13 +193,13 @@ export function buildPlanHtml(result: PipelineResult): string {
   .card-val { font-size:22px; font-weight:800; color:var(--dark); }
   .card-lbl { font-size:11px; color:var(--muted); margin-top:2px; }
   section { margin:26px 0; }
-  h2 { font-size:16px; border-left:4px solid var(--green); padding-left:10px; margin:0 0 12px; }
+  h2 { font-size:16px; border-left:4px solid var(--brand); padding-left:10px; margin:0 0 12px; }
   .table-wrap { overflow-x:auto; border:1px solid var(--border); border-radius:12px; background:#fff; }
   table { border-collapse:collapse; width:100%; font-size:12px; }
   thead th { background:var(--dark); color:#fff; text-align:left; padding:8px 10px; white-space:nowrap;
              position:sticky; top:0; }
   tbody td { padding:7px 10px; border-top:1px solid var(--border); vertical-align:top; }
-  tbody tr:nth-child(even) { background:#fbfefc; }
+  tbody tr:nth-child(even) { background:#F8FAFD; }
   td.r { text-align:right; font-variant-numeric:tabular-nums; }
   td.c { text-align:center; }
   td.kw { font-weight:600; white-space:nowrap; }
@@ -209,9 +211,9 @@ export function buildPlanHtml(result: PipelineResult): string {
   .delta { color:var(--muted); font-size:11px; }
   .badge { display:inline-block; padding:1px 8px; border-radius:999px; font-size:11px; font-weight:700; }
   .badge.p1 { background:var(--lred); color:#b3261e; }
-  .badge.p2 { background:var(--lblue); color:#1a56c4; }
-  .badge.p3 { background:var(--lgreen); color:var(--dark); }
-  .badge.money { background:var(--green); color:#fff; }
+  .badge.p2 { background:var(--lslate); color:#475569; }
+  .badge.p3 { background:var(--lbrand); color:var(--dark); }
+  .badge.money { background:var(--brand); color:#fff; }
   .empty { color:var(--muted); background:#fff; border:1px dashed var(--border); border-radius:12px; padding:16px; }
   ul.warn { background:#fff; border:1px solid var(--border); border-radius:12px; padding:14px 14px 14px 30px; }
   ul.warn li { margin:3px 0; }

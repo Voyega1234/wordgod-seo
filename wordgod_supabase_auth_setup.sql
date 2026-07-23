@@ -3,7 +3,7 @@
 -- =============================================================================
 -- อ่านก่อนรัน (สำคัญ):
 --
---   ระบบ WordGod ใช้ "Supabase Auth (Email Magic Link)" ซึ่ง Supabase สร้างและดูแล
+--   ระบบ WordGod ใช้ "Supabase Auth (Google OAuth)" ซึ่ง Supabase สร้างและดูแล
 --   ตารางล็อกอินจริงให้เองอยู่แล้ว ได้แก่ auth.users, auth.sessions, auth.identities ฯลฯ
 --   >> เราต้อง "ไม่" สร้าง/แก้ตารางในสคีมา auth เอง เพราะจะชนกับของ Supabase และทำ Auth พัง
 --
@@ -15,7 +15,7 @@
 --
 --   หมายเหตุตามจริง: โค้ดแอปตอนนี้ตัดสินการล็อกอินจาก JWT (getClaims) + โดเมนอีเมล
 --   ยังไม่ได้อ่านตาราง public.profiles ดังนั้นไฟล์นี้ "ไม่ใช่" เงื่อนไขที่ทำให้ล็อกอินทำงาน
---   สิ่งที่ทำให้ล็อกอินทำงานจริงคือ config: เปิด Email provider + redirect URLs +
+--   สิ่งที่ทำให้ล็อกอินทำงานจริงคือ config: เปิด Google provider + redirect URLs +
 --   ตั้ง env NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY บน Vercel
 --   ตาราง profiles มีไว้เก็บบันทึกผู้ใช้/ต่อยอดข้อมูลรายคนในอนาคต
 --

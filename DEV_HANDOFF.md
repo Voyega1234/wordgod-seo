@@ -13,9 +13,9 @@
 - เลือก Metric Mode ได้ 2 แบบ:
   - **API เท่านั้น (`api_only`)** — ใช้เฉพาะ Keyword ที่มี Metric ตรงจาก Google Keyword Planner หรือ DataForSEO; หากข้อมูลจริงไม่ครบ ระบบคืนจำนวนน้อยกว่าเป้าหมายพร้อมคำเตือน
   - **API + คำแนะนำ (`api_first`)** — เติม Keyword ให้ใกล้จำนวนเป้าหมาย แต่คำที่ไม่มี Metric ตรงจะเว้น Volume/CPC ว่าง
-- Login ใช้ Supabase Email Magic Link และอนุญาตเฉพาะอีเมลที่ลงท้ายตรงกับ `@convertcake.com`
+- Login ใช้ Supabase Google OAuth และอนุญาตเฉพาะอีเมลที่ลงท้ายตรงกับ `@convertcake.com`
 - หน้าและ API ที่ป้องกันไว้ตรวจ JWT claims ฝั่ง Server ไม่ได้เชื่อ `hd` จากหน้า Login เป็นตัวตัดสินสิทธิ์
-- Production จะปิดการเข้าใช้ (HTTP 503) หากยังตั้ง Supabase variables ไม่ครบ
+- หากยังไม่ตั้ง Supabase ระบบใช้ Basic Auth เดิมได้; Production จะปิดการเข้าใช้ (HTTP 503) ถ้าไม่มีทั้ง Supabase และ `AUTH_PASSWORD`
 - Reference output ที่ผู้ใช้ต้องการอยู่ใน ZIP ชื่อ `LINE_BK_Keyword_Research_Content_Plan.xlsx`
 - CPC ถูกบังคับเป็น THB ทั้งระบบ ไม่มีตัวเลือกเปลี่ยนสกุลเงิน
 
@@ -31,7 +31,7 @@
 8. เพิ่มตัวเลขสรุป API-backed / Suggestions / Shortfall และคำเตือนใน UI
 9. Excel ยังคง 6 ชีต และเพิ่ม `AI Estimate (Reference)` แยกจาก Volume/CPC
 10. เปลี่ยน UI เป็นพื้นขาว อ่านง่าย และทำหน้า Login โทนน้ำเงินสำหรับ WordGod
-11. เพิ่ม Supabase Email Magic Link พร้อมตรวจโดเมนฝั่ง Server ทุก Protected Page/API
+11. เพิ่ม Supabase Google Auth พร้อมตรวจโดเมนฝั่ง Server ทุก Protected Page/API
 12. ล็อก CPC เป็น THB: Google Ads บัญชี THB ใช้ค่าเดิม; DataForSEO แปลง USD เป็น THB ด้วยอัตราอ้างอิงที่มีวันที่กำกับ
 
 ## ห้ามเปลี่ยนระหว่างรับช่วงงาน
@@ -59,27 +59,34 @@ cp .env.example .env.local
 
 ไฟล์ ZIP ไม่ใส่ `.env.local`, secret, `node_modules`, `.next`, `.vercel` หรือ output เก่าไว้ให้
 
-### 2. ตั้ง Supabase Email Magic Link
+### 2. ตั้ง Supabase + Google Login
 
 ต้องสร้างหรือใช้ Supabase Project แยกสำหรับ WordGod ที่เจ้าของระบบยืนยันแล้วเท่านั้น **ห้ามใช้ `kanokphonthbb-web's Project` ไม่ว่ากรณีใด**
 
 1. สร้าง/เลือก Supabase Project
-2. ไปที่ **Authentication → Sign In / Providers → Email** แล้วเปิด Email Provider
-3. ตรวจว่า Magic Link email template ใช้ `{{ .ConfirmationURL }}`
-4. ที่ **Supabase → Authentication → URL Configuration** ตั้ง Production Site URL และเพิ่ม Redirect URLs:
+2. ไปที่ **Authentication → Sign In / Providers → Google** แล้วเปิด Google Provider
+3. สร้าง Google OAuth Web Client หรือใช้ Client ที่เจ้าของอนุมัติ แล้วใส่ Client ID/Secret ใน Supabase
+4. เพิ่ม Authorized redirect URI ใน Google OAuth Client:
+
+```text
+https://SUPABASE_PROJECT_REF.supabase.co/auth/v1/callback
+```
+
+5. ที่ **Supabase → Authentication → URL Configuration** ตั้ง Production Site URL และเพิ่ม Redirect URLs:
 
 ```text
 http://localhost:3030/auth/callback
 https://YOUR_PRODUCTION_DOMAIN/auth/callback
 ```
 
-5. ใส่ค่าต่อไปนี้ใน `.env.local` และ Vercel ทุก Environment ที่ใช้งาน:
+6. ใส่ค่าต่อไปนี้ใน `.env.local` และ Vercel ทุก Environment ที่ใช้งาน:
 
 ```text
 NEXT_PUBLIC_SUPABASE_URL=https://SUPABASE_PROJECT_REF.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 ```
 
+7. เก็บ `AUTH_PASSWORD` ไว้เป็น fallback จนกว่าจะทดสอบ Supabase Login ผ่านครบ แล้วค่อยตัดสินใจว่าจะคงไว้หรือถอดออก
 
 > อย่านำ Supabase Project อื่นมาใช้โดยอัตโนมัติ ต้องให้เจ้าของยืนยันชื่อและ Project Ref ของ WordGod ก่อน เพราะอาจเป็นฐานของระบบอื่น โดย `kanokphonthbb-web's Project` อยู่ในรายการห้ามแตะอย่างเด็ดขาด
 
@@ -132,7 +139,7 @@ DATAFORSEO_PASSWORD
 - ใส่ Environment Variables ตาม `.env.example` และข้อด้านบน
 - ตรวจว่า Vercel plan/runtime รองรับ `maxDuration = 800` สำหรับ `/api/pipeline` และ `/api/research`; ถ้าไม่รองรับ ต้องปรับ pipeline เป็น background job/queue หรือจำกัดขนาดงาน ไม่ควรลด timeout โดยไม่ทดสอบงาน 3,000 Keyword
 - Domain Production ต้องตรงกับ Supabase Site URL และ Redirect URL
-- ยังไม่ควร Deploy Production ถ้าไม่มี Supabase vars เพราะระบบจะ Fail Closed
+- ยังไม่ควร Deploy Production ถ้าไม่มี Supabase vars และไม่มี `AUTH_PASSWORD` เพราะระบบจะ Fail Closed
 
 ### 7. รัน Automated Checks
 
@@ -178,14 +185,14 @@ vercel --prod
 - `npm run build` — ผ่าน Production Build
 - Excel QA แบบ in-memory — ผ่าน, ได้ 6 ชีต และแยก Direct Metric ออกจาก AI Estimate ถูกต้อง
 - ยังไม่มี `.env.local` และยังไม่ได้ Link `.vercel` ในไฟล์ส่งมอบ
-- External setup ที่ยังต้องทำ: เลือก Supabase Project, เปิด Email Magic Link, ใส่ Vercel/GCP/API credentials และทดสอบกับบัญชีจริง
+- External setup ที่ยังต้องทำ: เลือก Supabase Project, ตั้ง Google OAuth, ใส่ Vercel/GCP/API credentials และทดสอบกับบัญชีจริง
 
 ## Definition of Done สำหรับ Dev
 
 ถือว่าพร้อมใช้งานจริงเมื่อครบทุกข้อ:
 
 - Automated Checks ผ่าน
-- Supabase Email Magic Link ผ่านทั้ง Allowed และ Denied domain
+- Supabase/Google OAuth ผ่านทั้ง Allowed และ Denied domain
 - Vertex AI OIDC ใช้งานบน Production ได้โดยไม่มี long-lived Gemini key
 - Google Keyword Planner และ DataForSEO คืนข้อมูลจริงด้วย credentials ของ Production
 - CPC ทุกแหล่งเป็น THB และการแปลงตรวจสอบย้อนกลับได้; เมื่อ FX ใช้ไม่ได้ต้องเว้น CPC

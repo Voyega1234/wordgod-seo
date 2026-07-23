@@ -3,7 +3,7 @@ import 'server-only';
 import ExcelJS from 'exceljs';
 import type { PipelineResult } from '../pipeline/wordgodPipeline';
 import { isDirectMetricSource } from '../pipeline/keywordMetricPolicy';
-import { textSparkline, threeMonthChange, formatPercentChange } from '../pipeline/kpMetrics';
+import { textSparkline, threeMonthChange, formatPercentChange, volStats } from '../pipeline/kpMetrics';
 import { injectNativeSparklines, type SparklineInjection, type SparklineEntry } from './nativeSparkline';
 
 const KP_MONTHLY_SHEET = 'KP Monthly';
@@ -13,15 +13,17 @@ function hasTrend(trend: number[] | undefined): trend is number[] {
   return Array.isArray(trend) && trend.filter((v) => typeof v === 'number' && isFinite(v)).length >= 2;
 }
 
-const BRAND_GREEN = '00B900';
-const DARK_GREEN = '087A36';
-const LIGHT_GREEN = 'EAF8EE';
-const LIGHT_BLUE = 'EAF2FF';
+// Corporate blue brand palette. BRAND_DARK carries white text on header bands
+// and title cells, so it stays dark enough for WCAG AA at 13px.
+const BRAND = '1D4ED8';
+const BRAND_DARK = '1E3A8A';
+const BRAND_TINT = 'EFF6FF';
+const LIGHT_CYAN = 'E0F2FE';
 const LIGHT_AMBER = 'FFF7DF';
 const LIGHT_RED = 'FDECEC';
-const BORDER = 'D9E2DC';
-const TEXT = '183028';
-const MUTED = '60756D';
+const BORDER = 'DDE3EA';
+const TEXT = '1E293B';
+const MUTED = '64748B';
 const WHITE = 'FFFFFF';
 
 function solid(color: string): ExcelJS.Fill {
@@ -37,14 +39,14 @@ function titleBand(sheet: ExcelJS.Worksheet, title: string, subtitle: string, la
   sheet.mergeCells(1, 1, 1, lastColumn);
   sheet.getCell(1, 1).value = title;
   sheet.getCell(1, 1).font = { name: 'Aptos Display', size: 20, bold: true, color: { argb: WHITE } };
-  sheet.getCell(1, 1).fill = solid(DARK_GREEN);
+  sheet.getCell(1, 1).fill = solid(BRAND_DARK);
   sheet.getCell(1, 1).alignment = { vertical: 'middle', horizontal: 'left' };
   sheet.getRow(1).height = 34;
 
   sheet.mergeCells(2, 1, 2, lastColumn);
   sheet.getCell(2, 1).value = subtitle;
-  sheet.getCell(2, 1).font = { name: 'Aptos', size: 10, color: { argb: 'D9F4E2' } };
-  sheet.getCell(2, 1).fill = solid(DARK_GREEN);
+  sheet.getCell(2, 1).font = { name: 'Aptos', size: 10, color: { argb: 'C7DBFA' } };
+  sheet.getCell(2, 1).fill = solid(BRAND_DARK);
   sheet.getCell(2, 1).alignment = { vertical: 'middle', horizontal: 'left' };
   sheet.getRow(2).height = 22;
 }
@@ -52,7 +54,7 @@ function titleBand(sheet: ExcelJS.Worksheet, title: string, subtitle: string, la
 function styleHeader(row: ExcelJS.Row): void {
   row.height = 28;
   row.eachCell(cell => {
-    cell.fill = solid(BRAND_GREEN);
+    cell.fill = solid(BRAND);
     cell.font = { name: 'Aptos', size: 10, bold: true, color: { argb: WHITE } };
     cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
     cell.border = thinBorder();
@@ -65,7 +67,7 @@ function styleDataRows(sheet: ExcelJS.Worksheet, startRow: number, endRow: numbe
     row.height = 24;
     row.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
       cell.font = { name: 'Aptos', size: 10, color: { argb: TEXT } };
-      cell.fill = solid(rowNumber % 2 === 0 ? WHITE : 'F8FBF9');
+      cell.fill = solid(rowNumber % 2 === 0 ? WHITE : 'F8FAFD');
       cell.border = thinBorder();
       cell.alignment = {
         vertical: 'top',
@@ -86,7 +88,7 @@ function applyPriorityFormatting(sheet: ExcelJS.Worksheet, range: string): void 
   sheet.addConditionalFormatting({
     ref: range,
     rules: [
-      { type: 'containsText', operator: 'containsText', text: 'P1', priority: 1, style: { fill: solid('DDF5E5'), font: { color: { argb: '087A36' }, bold: true } } },
+      { type: 'containsText', operator: 'containsText', text: 'P1', priority: 1, style: { fill: solid('DBE7FE'), font: { color: { argb: BRAND_DARK }, bold: true } } },
       { type: 'containsText', operator: 'containsText', text: 'P2', priority: 2, style: { fill: solid(LIGHT_AMBER), font: { color: { argb: '9A6700' }, bold: true } } },
       { type: 'containsText', operator: 'containsText', text: 'P3', priority: 3, style: { fill: solid(LIGHT_RED), font: { color: { argb: 'B42318' }, bold: true } } },
     ],
@@ -100,7 +102,7 @@ function buildOverview(workbook: ExcelJS.Workbook, result: PipelineResult): void
   titleBand(sheet, 'WordGod SEO Content Plan', `สร้างเมื่อ ${plan.summary.generatedAt} • ข้อมูลคีย์เวิร์ด ${plan.summary.keywordCount.toLocaleString()} รายการ`, 8);
 
   sheet.getCell('A4').value = 'การตั้งค่าแผน';
-  sheet.getCell('A4').font = { bold: true, color: { argb: DARK_GREEN }, size: 12 };
+  sheet.getCell('A4').font = { bold: true, color: { argb: BRAND_DARK }, size: 12 };
   const settings = [
     ['โหมด', plan.config.mode === 'full_plan' ? 'Full SEO Content Plan' : 'Quick Keyword Research'],
     ['ธุรกิจ / Niche', plan.config.niche],
@@ -116,7 +118,7 @@ function buildOverview(workbook: ExcelJS.Workbook, result: PipelineResult): void
     sheet.getCell(row, 2).value = entry[1];
     sheet.getCell(row, 1).font = { bold: true, color: { argb: MUTED } };
     sheet.getCell(row, 2).font = { color: { argb: TEXT } };
-    sheet.getCell(row, 1).fill = solid(LIGHT_GREEN);
+    sheet.getCell(row, 1).fill = solid(BRAND_TINT);
     sheet.getCell(row, 2).fill = solid(WHITE);
     sheet.getCell(row, 1).border = thinBorder();
     sheet.getCell(row, 2).border = thinBorder();
@@ -126,10 +128,10 @@ function buildOverview(workbook: ExcelJS.Workbook, result: PipelineResult): void
   const contentEnd = Math.max(plan.contentItems.length + 4, 5);
   const calendarEnd = Math.max(plan.calendar.length + 4, 5);
   const cards = [
-    { range: 'D4:E6', label: 'คีย์เวิร์ดทั้งหมด', formula: `=COUNTA('Keyword Master'!$B$5:$B$${keywordEnd})`, result: result.keywords.length, fill: LIGHT_GREEN },
-    { range: 'F4:G6', label: 'Volume API จริง', formula: `=COUNTIF('Keyword Master'!$V$5:$V$${keywordEnd},"high")`, result: result.meta.api_backed_count, fill: LIGHT_BLUE },
-    { range: 'D8:E10', label: 'บทความใน Calendar', formula: `=COUNTA('12-Month Calendar'!$G$5:$G$${calendarEnd})`, result: plan.calendar.length, fill: LIGHT_AMBER },
-    { range: 'F8:G10', label: 'Content Items', formula: `=COUNTA('Content Plan'!$B$5:$B$${contentEnd})`, result: plan.contentItems.length, fill: 'F2ECFF' },
+    { range: 'D4:E6', label: 'คีย์เวิร์ดทั้งหมด', formula: `COUNTA('Keyword Master'!$B$5:$B$${keywordEnd})`, result: result.keywords.length, fill: BRAND_TINT },
+    { range: 'F4:G6', label: 'Volume API จริง', formula: `COUNTIF('Keyword Master'!$V$5:$V$${keywordEnd},"high")`, result: result.meta.api_backed_count, fill: LIGHT_CYAN },
+    { range: 'D8:E10', label: 'บทความใน Calendar', formula: `COUNTA('12-Month Calendar'!$G$5:$G$${calendarEnd})`, result: plan.calendar.length, fill: LIGHT_AMBER },
+    { range: 'F8:G10', label: 'Content Items', formula: `COUNTA('Content Plan'!$B$5:$B$${contentEnd})`, result: plan.contentItems.length, fill: 'F2ECFF' },
   ];
   for (const card of cards) {
     sheet.mergeCells(card.range);
@@ -137,7 +139,7 @@ function buildOverview(workbook: ExcelJS.Workbook, result: PipelineResult): void
     cell.value = { formula: card.formula, result: card.result };
     cell.fill = solid(card.fill);
     cell.border = thinBorder();
-    cell.font = { size: 24, bold: true, color: { argb: DARK_GREEN } };
+    cell.font = { size: 24, bold: true, color: { argb: BRAND_DARK } };
     cell.alignment = { horizontal: 'center', vertical: 'middle' };
     const start = card.range.split(':')[0];
     const startCell = sheet.getCell(start);
@@ -152,7 +154,7 @@ function buildOverview(workbook: ExcelJS.Workbook, result: PipelineResult): void
   }
 
   sheet.getCell('A13').value = 'Quality Assurance';
-  sheet.getCell('A13').font = { bold: true, color: { argb: DARK_GREEN }, size: 12 };
+  sheet.getCell('A13').font = { bold: true, color: { argb: BRAND_DARK }, size: 12 };
   const qaRows = [
     ['สถานะ', plan.qa.passes ? 'PASS' : 'REVIEW'],
     ['บทความที่ขอ', plan.qa.requestedArticles],
@@ -174,7 +176,7 @@ function buildOverview(workbook: ExcelJS.Workbook, result: PipelineResult): void
   styleDataRows(sheet, 15, 14 + qaRows.length, [2]);
 
   sheet.getCell('D13').value = 'คำเตือน / สิ่งที่ควรตรวจเพิ่ม';
-  sheet.getCell('D13').font = { bold: true, color: { argb: DARK_GREEN }, size: 12 };
+  sheet.getCell('D13').font = { bold: true, color: { argb: BRAND_DARK }, size: 12 };
   const warnings = [...plan.qa.warnings, ...result.meta.warnings];
   if (warnings.length === 0) warnings.push('ไม่พบข้อผิดพลาดสำคัญ');
   warnings.forEach((warning, index) => {
@@ -190,11 +192,11 @@ function buildOverview(workbook: ExcelJS.Workbook, result: PipelineResult): void
 
   const sourceRow = Math.max(14 + qaRows.length, 13 + warnings.length) + 2;
   sheet.getCell(sourceRow, 1).value = 'แหล่งข้อมูล';
-  sheet.getCell(sourceRow, 1).font = { bold: true, color: { argb: DARK_GREEN } };
+  sheet.getCell(sourceRow, 1).font = { bold: true, color: { argb: BRAND_DARK } };
   sheet.mergeCells(sourceRow + 1, 1, sourceRow + 2, 8);
   const sourceCell = sheet.getCell(sourceRow + 1, 1);
   sourceCell.value = 'CPC ทุกแถวใช้ THB เท่านั้น • Google Keyword Planner ใช้ค่าเดิมเมื่อบัญชีเป็น THB หรือแปลงจากสกุลอื่น • DataForSEO แปลงจาก USD เป็น THB • อัตราอ้างอิงมีวันที่กำกับ • ถ้าแปลงไม่ได้จะเว้น CPC ว่าง ไม่แสดงค่าผิดสกุล • คำแนะนำจาก AI เว้น Volume/CPC';
-  sourceCell.fill = solid(LIGHT_BLUE);
+  sourceCell.fill = solid(LIGHT_CYAN);
   sourceCell.border = thinBorder();
   sourceCell.alignment = { wrapText: true, vertical: 'middle' };
   sheet.columns = [18, 28, 4, 16, 16, 16, 16, 18].map(width => ({ width }));
@@ -204,11 +206,16 @@ function buildKeywordMaster(workbook: ExcelJS.Workbook, result: PipelineResult):
   const sheet = workbook.addWorksheet('Keyword Master');
   configureSheet(sheet, 4);
   const headers = [
-    'No.', 'Keyword', 'Pillar', 'Volume', 'AI Estimate (Reference)', 'Organic KD', 'CPC (THB)', 'Competition', 'Competition Index',
+    'No.', 'Keyword', 'Pillar',
+    // Volume block: the average alone hides the real range and the seasonality
+    // that Keyword Planner shows on screen, so the monthly series we already
+    // fetch is summarised right next to it.
+    'Volume (avg 12m)', 'Vol Low', 'Vol High', 'Vol Latest', 'Vol Change (3m)',
+    'AI Estimate (Reference)', 'Organic KD', 'CPC (THB)', 'Competition', 'Competition Index',
     'Intent', 'Funnel', 'Keyword Type', 'Content Type', 'Opportunity', 'P Score', 'Priority',
     'AEO Opportunity', 'AI Search Score', 'Money Page?', 'Metric Source', 'As Of', 'Confidence', 'Title (H1)',
     'CPC Original Currency', 'CPC to THB Rate', 'CPC FX As Of',
-    'Top of page bid (low)', 'Top of page bid (high)', 'Three month change', 'KP Trend', 'Trend Chart',
+    'Top of page bid (low)', 'Top of page bid (high)', 'KP Trend', 'Trend Chart',
   ];
   titleBand(sheet, 'Keyword Master', 'ชุดคีย์เวิร์ดหลัก พร้อมแหล่งข้อมูลและความมั่นใจของ Metric', headers.length);
   sheet.getRow(4).values = headers;
@@ -219,11 +226,16 @@ function buildKeywordMaster(workbook: ExcelJS.Workbook, result: PipelineResult):
     const item = itemByKeyword.get(normalizeKey(keyword.keyword));
     const direct = isDirectMetricSource(keyword.volume_source);
     const trend = direct && hasTrend(keyword.monthly_trend) ? keyword.monthly_trend : undefined;
+    const vol = volStats(trend);
     sheet.getRow(index + 5).values = [
       index + 1,
       keyword.keyword,
       item?.pillar ?? keyword.parent_topic ?? keyword.keyword_group ?? null,
       direct ? keyword.volume : null,
+      vol.low,
+      vol.high,
+      vol.latest,
+      trend ? formatPercentChange(threeMonthChange(trend)) : '-',
       keyword.estimated_volume ?? null,
       keyword.organic_difficulty ?? null,
       direct && typeof keyword.cpc === 'number' && keyword.cpc > 0 ? keyword.cpc : null,
@@ -246,31 +258,40 @@ function buildKeywordMaster(workbook: ExcelJS.Workbook, result: PipelineResult):
       keyword.cpc_original_currency ?? null,
       keyword.cpc_to_thb_rate ?? null,
       keyword.cpc_rate_as_of ?? null,
-      // ── KP-native columns (27-31) ──
+      // ── KP-native columns (31-34) ──
       direct && typeof keyword.cpc_low === 'number' && keyword.cpc_low > 0 ? keyword.cpc_low : null,
       direct && typeof keyword.cpc_high === 'number' && keyword.cpc_high > 0 ? keyword.cpc_high : null,
-      trend ? formatPercentChange(threeMonthChange(trend)) : '-',
-      trend ? textSparkline(trend) : '-',
+      // Clicking the sparkline jumps to this keyword's row on KP Monthly — the
+      // spreadsheet stand-in for Keyword Planner's "monthly searches" popup.
+      trend
+        ? {
+            formula: `HYPERLINK("#'${KP_MONTHLY_SHEET}'!A${index + 5}","${textSparkline(trend)}")`,
+            result: textSparkline(trend),
+          }
+        : '-',
       '', // native sparkline target — chart injected post-write
     ];
   });
   const endRow = Math.max(result.keywords.length + 4, 5);
-  styleDataRows(sheet, 5, endRow, [1, 4, 5, 6, 7, 9, 14, 15, 18, 27, 28, 29]);
-  sheet.autoFilter = { from: 'A4', to: `AE${endRow}` };
+  styleDataRows(sheet, 5, endRow, [1, 4, 5, 6, 7, 8, 9, 10, 11, 13, 18, 19, 22, 31, 32]);
+  sheet.autoFilter = { from: 'A4', to: `AH${endRow}` };
   sheet.getColumn(4).numFmt = '#,##0';
   sheet.getColumn(5).numFmt = '#,##0';
-  sheet.getColumn(6).numFmt = '0';
-  sheet.getColumn(7).numFmt = '#,##0.00';
-  sheet.getColumn(14).numFmt = '0';
-  sheet.getColumn(15).numFmt = '0';
-  sheet.getColumn(27).numFmt = '#,##0.00';
-  sheet.getColumn(28).numFmt = '#,##0.00';
-  sheet.getColumn(16).eachCell((cell, rowNumber) => {
+  sheet.getColumn(6).numFmt = '#,##0';
+  sheet.getColumn(7).numFmt = '#,##0';
+  sheet.getColumn(9).numFmt = '#,##0';
+  sheet.getColumn(10).numFmt = '0';
+  sheet.getColumn(11).numFmt = '#,##0.00';
+  sheet.getColumn(18).numFmt = '0';
+  sheet.getColumn(19).numFmt = '0';
+  sheet.getColumn(31).numFmt = '#,##0.00';
+  sheet.getColumn(32).numFmt = '#,##0.00';
+  sheet.getColumn(20).eachCell((cell, rowNumber) => {
     if (rowNumber >= 5) cell.dataValidation = { type: 'list', allowBlank: false, formulae: ['"P1,P2,P3"'] };
   });
-  applyPriorityFormatting(sheet, `P5:P${endRow}`);
-  const widths = [7, 28, 20, 12, 18, 12, 12, 15, 14, 20, 10, 18, 20, 12, 12, 10, 18, 14, 13, 18, 13, 12, 48, 20, 16, 14,
-    16, 16, 14, 16, 14];
+  applyPriorityFormatting(sheet, `T5:T${endRow}`);
+  const widths = [7, 28, 20, 16, 11, 11, 12, 15, 18, 12, 12, 15, 14, 20, 10, 18, 20, 12, 12, 10, 18, 14, 13, 18, 13, 12,
+    48, 20, 16, 14, 16, 16, 16, 14];
   sheet.columns.forEach((column, index) => column.width = widths[index] ?? 16);
 }
 
@@ -375,34 +396,39 @@ function buildCalendarSummary(workbook: ExcelJS.Workbook, result: PipelineResult
   styleHeader(sheet.getRow(4));
   for (let index = 0; index < plan.config.months; index++) {
     const row = index + 5;
-    const month = plan.calendar.find(entry => entry.monthIndex === index + 1)?.month
-      ?? plan.config.startMonth;
+    const monthEntries = plan.calendar.filter(entry => entry.monthIndex === index + 1);
+    const month = monthEntries[0]?.month ?? plan.config.startMonth;
+    // Pre-compute the cached results from plan data so the cells read correctly
+    // even in viewers that don't auto-recalculate (Numbers, some previewers).
+    const count = (pred: (e: (typeof monthEntries)[number]) => boolean) => monthEntries.filter(pred).length;
     sheet.getCell(row, 1).value = month;
-    sheet.getCell(row, 2).value = { formula: `=COUNTIF('12-Month Calendar'!$C$5:$C$${calendarEnd},A${row})`, result: 0 };
-    sheet.getCell(row, 3).value = { formula: `=COUNTIFS('12-Month Calendar'!$C$5:$C$${calendarEnd},A${row},'12-Month Calendar'!$J$5:$J$${calendarEnd},"P1")`, result: 0 };
-    sheet.getCell(row, 4).value = { formula: `=COUNTIFS('12-Month Calendar'!$C$5:$C$${calendarEnd},A${row},'12-Month Calendar'!$J$5:$J$${calendarEnd},"P2")`, result: 0 };
-    sheet.getCell(row, 5).value = { formula: `=COUNTIFS('12-Month Calendar'!$C$5:$C$${calendarEnd},A${row},'12-Month Calendar'!$J$5:$J$${calendarEnd},"P3")`, result: 0 };
-    sheet.getCell(row, 6).value = { formula: `=COUNTIFS('12-Month Calendar'!$C$5:$C$${calendarEnd},A${row},'12-Month Calendar'!$I$5:$I$${calendarEnd},"TOFU")`, result: 0 };
-    sheet.getCell(row, 7).value = { formula: `=COUNTIFS('12-Month Calendar'!$C$5:$C$${calendarEnd},A${row},'12-Month Calendar'!$I$5:$I$${calendarEnd},"MOFU")`, result: 0 };
-    sheet.getCell(row, 8).value = { formula: `=COUNTIFS('12-Month Calendar'!$C$5:$C$${calendarEnd},A${row},'12-Month Calendar'!$I$5:$I$${calendarEnd},"BOFU")`, result: 0 };
+    sheet.getCell(row, 2).value = { formula: `COUNTIF('12-Month Calendar'!$C$5:$C$${calendarEnd},A${row})`, result: monthEntries.length };
+    sheet.getCell(row, 3).value = { formula: `COUNTIFS('12-Month Calendar'!$C$5:$C$${calendarEnd},A${row},'12-Month Calendar'!$J$5:$J$${calendarEnd},"P1")`, result: count(e => e.priority === 'P1') };
+    sheet.getCell(row, 4).value = { formula: `COUNTIFS('12-Month Calendar'!$C$5:$C$${calendarEnd},A${row},'12-Month Calendar'!$J$5:$J$${calendarEnd},"P2")`, result: count(e => e.priority === 'P2') };
+    sheet.getCell(row, 5).value = { formula: `COUNTIFS('12-Month Calendar'!$C$5:$C$${calendarEnd},A${row},'12-Month Calendar'!$J$5:$J$${calendarEnd},"P3")`, result: count(e => e.priority === 'P3') };
+    sheet.getCell(row, 6).value = { formula: `COUNTIFS('12-Month Calendar'!$C$5:$C$${calendarEnd},A${row},'12-Month Calendar'!$I$5:$I$${calendarEnd},"TOFU")`, result: count(e => e.funnel === 'TOFU') };
+    sheet.getCell(row, 7).value = { formula: `COUNTIFS('12-Month Calendar'!$C$5:$C$${calendarEnd},A${row},'12-Month Calendar'!$I$5:$I$${calendarEnd},"MOFU")`, result: count(e => e.funnel === 'MOFU') };
+    sheet.getCell(row, 8).value = { formula: `COUNTIFS('12-Month Calendar'!$C$5:$C$${calendarEnd},A${row},'12-Month Calendar'!$I$5:$I$${calendarEnd},"BOFU")`, result: count(e => e.funnel === 'BOFU') };
   }
   styleDataRows(sheet, 5, 4 + plan.config.months, [2, 3, 4, 5, 6, 7, 8]);
 
   const pillarStart = 7 + plan.config.months;
   sheet.getCell(pillarStart, 1).value = 'Pillar Summary';
-  sheet.getCell(pillarStart, 1).font = { bold: true, size: 12, color: { argb: DARK_GREEN } };
+  sheet.getCell(pillarStart, 1).font = { bold: true, size: 12, color: { argb: BRAND_DARK } };
   sheet.getRow(pillarStart + 1).values = ['Pillar', 'Articles', 'P1', 'P2', 'P3', 'TOFU', 'MOFU', 'BOFU'];
   styleHeader(sheet.getRow(pillarStart + 1));
   plan.pillars.forEach((pillar, index) => {
     const row = pillarStart + 2 + index;
+    // plan.pillars already carries the per-pillar counts — reuse them as the
+    // cached formula results instead of hardcoding 0.
     sheet.getCell(row, 1).value = pillar.name;
-    sheet.getCell(row, 2).value = { formula: `=COUNTIF('12-Month Calendar'!$E$5:$E$${calendarEnd},A${row})`, result: 0 };
-    sheet.getCell(row, 3).value = { formula: `=COUNTIFS('12-Month Calendar'!$E$5:$E$${calendarEnd},A${row},'12-Month Calendar'!$J$5:$J$${calendarEnd},"P1")`, result: 0 };
-    sheet.getCell(row, 4).value = { formula: `=COUNTIFS('12-Month Calendar'!$E$5:$E$${calendarEnd},A${row},'12-Month Calendar'!$J$5:$J$${calendarEnd},"P2")`, result: 0 };
-    sheet.getCell(row, 5).value = { formula: `=COUNTIFS('12-Month Calendar'!$E$5:$E$${calendarEnd},A${row},'12-Month Calendar'!$J$5:$J$${calendarEnd},"P3")`, result: 0 };
-    sheet.getCell(row, 6).value = { formula: `=COUNTIFS('12-Month Calendar'!$E$5:$E$${calendarEnd},A${row},'12-Month Calendar'!$I$5:$I$${calendarEnd},"TOFU")`, result: 0 };
-    sheet.getCell(row, 7).value = { formula: `=COUNTIFS('12-Month Calendar'!$E$5:$E$${calendarEnd},A${row},'12-Month Calendar'!$I$5:$I$${calendarEnd},"MOFU")`, result: 0 };
-    sheet.getCell(row, 8).value = { formula: `=COUNTIFS('12-Month Calendar'!$E$5:$E$${calendarEnd},A${row},'12-Month Calendar'!$I$5:$I$${calendarEnd},"BOFU")`, result: 0 };
+    sheet.getCell(row, 2).value = { formula: `COUNTIF('12-Month Calendar'!$E$5:$E$${calendarEnd},A${row})`, result: pillar.totalItems };
+    sheet.getCell(row, 3).value = { formula: `COUNTIFS('12-Month Calendar'!$E$5:$E$${calendarEnd},A${row},'12-Month Calendar'!$J$5:$J$${calendarEnd},"P1")`, result: pillar.p1 };
+    sheet.getCell(row, 4).value = { formula: `COUNTIFS('12-Month Calendar'!$E$5:$E$${calendarEnd},A${row},'12-Month Calendar'!$J$5:$J$${calendarEnd},"P2")`, result: pillar.p2 };
+    sheet.getCell(row, 5).value = { formula: `COUNTIFS('12-Month Calendar'!$E$5:$E$${calendarEnd},A${row},'12-Month Calendar'!$J$5:$J$${calendarEnd},"P3")`, result: pillar.p3 };
+    sheet.getCell(row, 6).value = { formula: `COUNTIFS('12-Month Calendar'!$E$5:$E$${calendarEnd},A${row},'12-Month Calendar'!$I$5:$I$${calendarEnd},"TOFU")`, result: pillar.tofu };
+    sheet.getCell(row, 7).value = { formula: `COUNTIFS('12-Month Calendar'!$E$5:$E$${calendarEnd},A${row},'12-Month Calendar'!$I$5:$I$${calendarEnd},"MOFU")`, result: pillar.mofu };
+    sheet.getCell(row, 8).value = { formula: `COUNTIFS('12-Month Calendar'!$E$5:$E$${calendarEnd},A${row},'12-Month Calendar'!$I$5:$I$${calendarEnd},"BOFU")`, result: pillar.bofu };
   });
   styleDataRows(sheet, pillarStart + 2, pillarStart + 1 + Math.max(plan.pillars.length, 1), [2, 3, 4, 5, 6, 7, 8]);
   sheet.columns = [24, 14, 10, 10, 10, 10, 10, 10, 4, 4].map(width => ({ width }));
@@ -462,15 +488,29 @@ function buildCompetitorSheet(workbook: ExcelJS.Workbook, result: PipelineResult
   sheet.columns.forEach((column, index) => column.width = widths[index] ?? 16);
 }
 
+// Keyword Planner reports the twelve complete months before the request, so the
+// series ending "now" starts eleven months before the previous month. Labelling
+// the columns this way lets a reader line the sheet up against the KP screen.
+function trailingMonthLabels(generatedAt: string): string[] {
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const parsed = new Date(generatedAt);
+  const base = isNaN(parsed.getTime()) ? new Date() : parsed;
+  return Array.from({ length: 12 }, (_, i) => {
+    const d = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() - 12 + i, 1));
+    return `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  });
+}
+
 // KP monthly-volume matrix: one row per keyword (aligned to Keyword Master row
 // numbers) with the trailing 12-month series in columns C..N. Feeds the native
 // in-cell sparklines drawn in Keyword Master.
 function buildKpMonthlySheet(workbook: ExcelJS.Workbook, result: PipelineResult): void {
   const sheet = workbook.addWorksheet(KP_MONTHLY_SHEET);
   configureSheet(sheet, 4);
-  const monthHeaders = Array.from({ length: 12 }, (_, i) => String(i + 1));
+  const monthHeaders = trailingMonthLabels(result.meta.generated_at);
   const headers = ['No.', 'Keyword', ...monthHeaders];
-  titleBand(sheet, 'KP Monthly', 'ปริมาณค้นหารายเดือน 12 เดือน (เก่า → ล่าสุด) • ที่มา: Google Keyword Planner', headers.length);
+  const range = `${monthHeaders[0]} – ${monthHeaders[monthHeaders.length - 1]}`;
+  titleBand(sheet, 'KP Monthly', `ปริมาณค้นหารายเดือน ${range} (เก่า → ล่าสุด) • ที่มา: Google Keyword Planner`, headers.length);
   sheet.getRow(4).values = headers;
   styleHeader(sheet.getRow(4));
 
@@ -490,8 +530,8 @@ function buildKpMonthlySheet(workbook: ExcelJS.Workbook, result: PipelineResult)
   styleDataRows(sheet, 5, endRow, [1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
   for (let c = 3; c <= 14; c++) sheet.getColumn(c).numFmt = '#,##0';
   sheet.autoFilter = { from: 'A4', to: `N${endRow}` };
-  const widths = [7, 28, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9];
-  sheet.columns.forEach((column, index) => column.width = widths[index] ?? 9);
+  const widths = [7, 28, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11];
+  sheet.columns.forEach((column, index) => column.width = widths[index] ?? 11);
 }
 
 // Build the Keyword-Master native sparkline spec: one line chart per keyword
@@ -502,7 +542,7 @@ function buildSparklineInjection(result: PipelineResult): SparklineInjection {
     const direct = isDirectMetricSource(keyword.volume_source);
     if (!direct || !hasTrend(keyword.monthly_trend)) return;
     const row = index + 5;
-    sparklines.push({ location: `AE${row}`, dataRange: `'${KP_MONTHLY_SHEET}'!C${row}:N${row}` });
+    sparklines.push({ location: `AH${row}`, dataRange: `'${KP_MONTHLY_SHEET}'!C${row}:N${row}` });
   });
   return { sheetName: 'Keyword Master', sparklines };
 }

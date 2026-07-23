@@ -8,7 +8,7 @@ import { derivePillarsFromSiteContext } from '../../../lib/pipeline/siteTaxonomy
 import { authorizeApiRequest } from '@/lib/auth/access';
 
 export async function POST(req: NextRequest) {
-  const denied = await authorizeApiRequest();
+  const denied = await authorizeApiRequest(req);
   if (denied) return denied;
 
   const { url } = await req.json();

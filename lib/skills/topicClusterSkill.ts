@@ -1,6 +1,6 @@
 import { callGemini } from '../gemini';
 import type { PipelineKeyword } from '../pipeline/wordgodPipeline';
-import { segmentWords } from '../text/thai';
+import { segmentWords, slugifyLatin } from '../text/thai';
 
 export interface ClusterKeyword {
   keyword: string;
@@ -32,12 +32,13 @@ const SLUG_STOPWORDS = new Set([
 ]);
 
 function sanitizeSlug(slug: string): string {
-  return segmentWords(slug.toLowerCase().trim(), /[\u0E00-\u0E7F]/.test(slug) ? 'th' : 'en')
-    .filter(w => w && !SLUG_STOPWORDS.has(w))
-    .slice(0, 5)
-    .join('-')
-    .replace(/[^\p{L}\p{N}-]/gu, '')
-    .substring(0, 50);
+  // Romanize first: a raw Thai slug (e.g. the keyword fallback when Gemini
+  // omits one) must become Latin, not survive as Thai codepoints in a URL.
+  // slugifyLatin also strips Thai vowel marks that \p{L} would leave dangling.
+  const latin = slugifyLatin(slug, 80);
+  const words = latin.split('-').filter(w => w && !SLUG_STOPWORDS.has(w));
+  const kept = words.length > 0 ? words : latin.split('-').filter(Boolean);
+  return kept.slice(0, 5).join('-').replace(/[^a-z0-9-]/g, '').substring(0, 50);
 }
 
 function buildClusterPrompt(keywords: PipelineKeyword[], niche: string, targetGroups: number): string {

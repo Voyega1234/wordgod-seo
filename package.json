@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": "22.x"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "dev": "next dev --port 3030",
@@ -27,8 +27,9 @@
     "test:title": "npx ts-node --project tsconfig.test.json lib/pipeline/titleScoring.test.ts",
     "test:titleai": "npx ts-node --project tsconfig.test.json lib/skills/seoTitleAiSkill.test.ts",
     "test:html": "npx ts-node --project tsconfig.test.json lib/export/planHtml.test.ts",
-    "test:all": "npm run test && npm run test:ads && npm run test:plan && npm run test:metrics && npm run test:currency && npm run test:crawl && npm run test:eeat && npm run test:dfs-ranked && npm run test:serp && npm run test:rankval && npm run test:eeat-gemini && npm run test:kpmetrics && npm run test:sparkline && npm run test:taxonomy && npm run test:title && npm run test:titleai && npm run test:html",
-    "token": "npx ts-node --project tsconfig.test.json scripts/generate-refresh-token.ts"
+    "test:all": "npm run test && npm run test:ads && npm run test:plan && npm run test:metrics && npm run test:currency && npm run test:crawl && npm run test:eeat && npm run test:dfs-ranked && npm run test:serp && npm run test:rankval && npm run test:eeat-gemini && npm run test:kpmetrics && npm run test:sparkline && npm run test:taxonomy && npm run test:title && npm run test:titleai && npm run test:html && npm run test:thai",
+    "token": "npx ts-node --project tsconfig.test.json scripts/generate-refresh-token.ts",
+    "test:thai": "npx ts-node --project tsconfig.test.json lib/text/thai.test.ts"
   },
   "dependencies": {
     "@ai-sdk/google-vertex": "^5.0.5",
@@ -45,6 +46,7 @@
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@next/swc-darwin-arm64": "^16.2.9",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

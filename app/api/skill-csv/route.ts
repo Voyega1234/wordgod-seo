@@ -11,7 +11,7 @@ import type { SkillInput } from '@/lib/skills/keyword-seo-title';
 import { authorizeApiRequest } from '@/lib/auth/access';
 
 export async function POST(req: NextRequest) {
-  const denied = await authorizeApiRequest();
+  const denied = await authorizeApiRequest(req);
   if (denied) return denied;
 
   try {

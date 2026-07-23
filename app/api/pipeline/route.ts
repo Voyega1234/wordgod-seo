@@ -27,7 +27,7 @@ import { authorizeApiRequest } from '@/lib/auth/access';
 export const maxDuration = 800; // Vercel Pro max — pipeline needs long runtime for large keyword runs
 
 export async function POST(req: NextRequest) {
-  const denied = await authorizeApiRequest();
+  const denied = await authorizeApiRequest(req);
   if (denied) return denied;
 
   const body = await req.json();

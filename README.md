@@ -1,108 +1,75 @@
-# WordGod — AI Keyword Research Platform
+# WordGod — SEO Keyword Research & Content Planning
 
-ระบบวิจัย keyword อัจฉริยะ ใช้ Gemini AI + Google Keyword Planner
+WordGod เปลี่ยนชุดคีย์เวิร์ดให้เป็น Keyword Master, Topic/Pillar Map, Content Plan และ Content Calendar ที่ตรวจสอบย้อนกลับได้ พร้อมส่งออก Excel 6 ชีต
 
----
+## ความสามารถหลัก
+
+- เลือกจำนวนคีย์เวิร์ดได้ 20–3,000 รายการ แยกจากจำนวนบทความในแผน
+- เลือกได้ระหว่างเฉพาะ Volume/CPC จาก API จริง หรือ API-first พร้อมคำแนะนำที่เว้น Metric ว่าง
+- เลือก Quick Keyword Research หรือ Full SEO Content Plan
+- วางแผน 1–12 เดือน และกำหนดบทความต่อเดือนได้ 1–50 บทความ
+- กำหนด Pillar, Seed, Money Page และ quota ต่อ Pillar เองได้ หรือให้ระบบสร้างอัตโนมัติ
+- ใช้การตัดคำภาษาไทยในการจัดกลุ่มและประเมิน keyword depth
+- ใช้ Search Volume/CPC จาก Google Keyword Planner และ Organic KD จาก DataForSEO เมื่อมี credentials
+- บังคับ CPC เป็น THB ทั้งระบบ: Google Ads บัญชี THB ใช้ค่าเดิม ส่วน DataForSEO แปลงจาก USD พร้อมเก็บอัตรา/วันที่อ้างอิง
+- จัด Funnel (TOFU/MOFU/BOFU), Priority (P1/P2/P3), Money Page และ Internal Links
+- QA ตรวจ keyword/title ซ้ำ, metric ที่หาย และการเชื่อม Calendar กลับไป Keyword Master
+- ส่งออก Excel 6 ชีต: Overview, Keyword Master, Content Plan, Pillar Map, Calendar และ Calendar Summary
+- Supabase Email Magic Link จำกัดสิทธิ์แบบ server-side เฉพาะ `@convertcake.com`
 
 ## Stack
 
-- **Next.js 16** (App Router, TypeScript, Tailwind CSS v4)
-- **Gemini AI** (keyword expansion + title generation + clustering)
-- **Google Ads API v21** (Keyword Planner — real search volume)
-- **Port:** 3030 (local development)
+- Next.js 16, React 19, TypeScript, Tailwind CSS 4
+- Supabase Auth + Email Magic Link
+- Vertex AI Gemini ผ่าน Vercel OIDC ตามระบบเดิม
+- Google Ads API v21 และ DataForSEO
+- ExcelJS สำหรับ XLSX export
+- Node.js 22 ขึ้นไป
 
----
-
-## Setup
-
-### 1. Install dependencies
+## เริ่มใช้งาน
 
 ```bash
 npm install
-```
-
-### 2. Environment variables
-
-```bash
 cp .env.example .env.local
-```
-
-แก้ไขค่าใน `.env.local` ให้ครบ:
-
-| Variable | ได้จากไหน |
-|---|---|
-| `AUTH_USERNAME` | กำหนดเองได้ |
-| `AUTH_PASSWORD` | กำหนดเองได้ |
-| `GEMINI_API_KEY` | https://aistudio.google.com/app/apikey |
-| `GEMINI_MODEL` | ชื่อ Gemini model เช่น `gemini-3-flash-preview` (ไม่ใส่จะใช้ค่า default) |
-| `GOOGLE_ADS_DEVELOPER_TOKEN` | Google Ads → Tools → API Center |
-| `GOOGLE_ADS_CLIENT_ID` | Google Cloud Console → OAuth2 |
-| `GOOGLE_ADS_CLIENT_SECRET` | Google Cloud Console → OAuth2 |
-| `GOOGLE_ADS_REFRESH_TOKEN` | รัน script ด้านล่าง |
-| `GOOGLE_ADS_CUSTOMER_ID` | Google Ads account ID (ตัวเลขเท่านั้น) |
-| `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | MCC Manager account ID (ตัวเลขเท่านั้น) |
-
-### 3. Generate Refresh Token (ครั้งแรกครั้งเดียว)
-
-```bash
-npx ts-node scripts/generate-refresh-token.ts
-```
-
-เปิด URL ที่แสดง → login Google Ads account → copy code → วางใน terminal
-จะได้ `GOOGLE_ADS_REFRESH_TOKEN` ให้ใส่ใน `.env.local`
-
-### 4. Run
-
-```bash
-# Development
 npm run dev
-
-# Production
-npm run build
-npm start
 ```
 
-เปิด http://localhost:3030
+เปิด `http://localhost:3030`
 
----
+หากยังไม่กำหนด Supabase variables ระบบจะใช้ Basic Auth เดิมจาก `AUTH_USERNAME` / `AUTH_PASSWORD` โดยอัตโนมัติ ใน Production หากไม่มีทั้ง Supabase และ `AUTH_PASSWORD` ระบบจะตอบ 503 และไม่เปิดให้เข้าใช้งาน
 
-## Deploy to Vercel
+## Supabase Auth + Email Magic Link
 
-โปรเจกต์ใช้ Vercel แบบ zero-config สำหรับ Next.js:
+> **คำเตือน:** WordGod ต้องใช้ Supabase Project แยกที่เจ้าของยืนยันแล้วเท่านั้น ห้ามใช้หรือแก้ไข `kanokphonthbb-web's Project` เพราะเป็นคนละระบบ
 
-1. Push โปรเจกต์ขึ้น GitHub/GitLab/Bitbucket
-2. Import repository ใน Vercel
-3. เพิ่ม Environment Variables จาก `.env.example` ใน Project Settings
-4. Deploy โดยใช้ค่าเริ่มต้น:
-   - Framework Preset: Next.js
-   - Install Command: `npm install`
-   - Build Command: `npm run build`
-   - Node.js: 20.9 ขึ้นไป
-
-Environment Variables ขั้นต่ำ:
+1. สร้างหรือเลือก Supabase project
+2. เปิด Email provider ใน **Authentication → Sign In / Providers → Email**
+3. ตรวจว่า Email template แบบ Magic Link ใช้ `{{ .ConfirmationURL }}`
+4. ใน **Authentication → URL Configuration** ตั้ง Site URL ของ production และเพิ่ม Redirect URLs:
+   - `http://localhost:3030/auth/callback`
+   - `https://<your-production-domain>/auth/callback`
+5. ใส่ค่าต่อไปนี้ใน `.env.local` และ Vercel Environment Variables:
 
 ```text
-AUTH_USERNAME
-AUTH_PASSWORD
-GEMINI_API_KEY
+NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 ```
 
-Optional Gemini model override:
+ไม่ต้องใช้ `SUPABASE_SERVICE_ROLE_KEY` หรือ secret key สำหรับระบบ Auth นี้ สิทธิ์จริงตรวจจาก JWT claims บนเซิร์ฟเวอร์ทุก protected page และ API โดยเทียบโดเมนแบบ exact match เท่านั้น
 
-```text
-GEMINI_MODEL=gemini-3-flash-preview
-```
+## API credentials เดิม
 
-ถ้าต้องการ volume จริงจาก Keyword Planner ให้เพิ่ม `GOOGLE_ADS_*` ทุกตัวตาม `.env.example`
+การเปลี่ยน Auth ไม่เปลี่ยนชื่อ environment variables หรือขั้นตอนอ่าน credentials ของระบบ SEO:
 
-ข้อจำกัดของ Vercel deployment นี้:
+- Vertex AI/Gemini: ใช้ `GCP_*` + Vercel OIDC ตาม [DEPLOYMENT.md](./DEPLOYMENT.md)
+- Google Keyword Planner: ใช้ `GOOGLE_ADS_*` ตามเดิม
+- DataForSEO: ใช้ `DATAFORSEO_LOGIN` และ `DATAFORSEO_PASSWORD` ตามเดิม
 
-- Pipeline API ใช้ Node.js runtime และกำหนดเวลาทำงานสูงสุด 300 วินาที
-- จำกัดการสร้างครั้งละไม่เกิน 3,000 keywords; งานขนาดใหญ่มีโอกาสชน Vercel timeout ตามปริมาณ API call จริง
-- Keyword Planner cache บน Vercel อยู่ใน temporary filesystem และอาจหายเมื่อ function instance ถูกสร้างใหม่
-- หากต้องการงานเกิน 3,000 keywords หรือเก็บประวัติ ควรเปลี่ยนเป็น background job + database/queue
+ระบบสร้าง candidate มากกว่าเป้าหมายเพื่อเพิ่มโอกาสพบคำที่มีข้อมูลจริง แล้วใช้ Keyword Planner และ DataForSEO คัด Primary Keyword ก่อน ค่า AI estimate จะไม่ถูกใส่ในคอลัมน์ Volume/CPC และระบบจะไม่ยืม Volume จากคำสั้นไปใส่ให้ Long-tail
 
-ตรวจสอบก่อน deploy:
+CPC ไม่มีตัวเลือกสกุลเงินและถูกล็อกเป็น THB ระบบอ่าน `customer.currency_code` ของ Google Ads; ถ้าบัญชีเป็น THB จะใช้ค่าเดิมโดยไม่แปลง หากเป็นสกุลอื่นจะแปลงเป็น THB ส่วน DataForSEO จะแปลงจาก USD เป็น THB ด้วยอัตราอ้างอิงแบบมีวันที่จาก Frankfurter (ไม่ต้องใช้ API key เพิ่ม) หากดึงอัตราไม่ได้ ระบบจะเว้น CPC ของ Provider นั้นและแจ้งเตือน โดยยังคงใช้ Search Volume ได้
+
+## คำสั่งตรวจสอบ
 
 ```bash
 npm run test:all
@@ -110,47 +77,26 @@ npm run lint
 npm run build
 ```
 
----
+## API routes
 
-## Features
+| Route | Method | หน้าที่ |
+|---|---:|---|
+| `/api/pipeline` | POST | Pipeline หลักแบบ SSE |
+| `/api/crawl-site` | POST | อ่าน sitemap และหน้าสำคัญ |
+| `/api/export-plan` | POST | Export Full Plan เป็น XLSX 6 ชีต |
+| `/api/export` | POST | Export CSV |
+| `/api/sitemap-export` | POST | Export sitemap |
 
-- **Keyword Research** — Gemini AI expand keyword จาก seed พร้อม Google Search grounding
-- **Real Volume** — Google Keyword Planner ดึง search volume จริง
-- **Intent Mix** — ปรับ ratio ของ Informational / Commercial / Transactional / Navigational / Update
-- **6 Presets** — Balanced / New Website / Lead Gen / Affiliate / Knowledge / Manual
-- **Topic Clusters** — จัดกลุ่ม keyword เป็น pillar + supporting พร้อม English slug
-- **Sitemap** — Export CSV + XML พร้อม URL structure
-- **AI Titles** — Gemini เขียน H1 title สำหรับแต่ละ keyword
-- **Snake Game** — เล่นระหว่างรอ generate
+ทุก API route ใช้ authorization boundary เดียวกันกับหน้าเว็บ
 
----
+## Deploy
 
-## API Routes
+ใช้ Node.js 22+ และเพิ่ม environment variables ใน Vercel แยกตาม Production/Preview/Development จากนั้นรัน:
 
-| Route | Method | Description |
-|---|---|---|
-| `/api/pipeline` | POST | Main keyword research pipeline (SSE streaming) |
-| `/api/export` | POST | Export keywords เป็น CSV |
-| `/api/sitemap-export` | POST | Export sitemap เป็น CSV หรือ XML |
+```bash
+npm ci
+npm run test:all
+npm run build
+```
 
----
-
-## Google Ads API Setup
-
-1. ไปที่ [Google Cloud Console](https://console.cloud.google.com)
-2. สร้าง project ใหม่ หรือใช้ project เดิม
-3. Enable **Google Ads API**
-4. สร้าง **OAuth 2.0 Client ID** ประเภท Desktop App
-5. ดาวน์โหลด credentials (client_id, client_secret)
-6. ไปที่ Google Ads → Tools → API Center → ขอ Developer Token
-7. รัน `scripts/generate-refresh-token.ts` เพื่อ generate refresh token
-
-> **MCC Account:** ถ้าใช้ Manager Account (MCC) ให้ใส่ MCC ID ใน `GOOGLE_ADS_LOGIN_CUSTOMER_ID` และ client account ID ใน `GOOGLE_ADS_CUSTOMER_ID` — จำเป็นสำหรับการดึง historical keyword volume
-
----
-
-## Notes
-
-- ระบบใช้ชื่อ **WordGod** เท่านั้น
-- Credentials ทั้งหมดอยู่ server-side เท่านั้น ไม่มี expose ฝั่ง frontend
-- Basic Auth จะเปิดเมื่อกำหนด `AUTH_PASSWORD`; production ควรกำหนดทั้ง username และ password
+รายละเอียด Vertex AI OIDC และ Supabase อยู่ใน [DEPLOYMENT.md](./DEPLOYMENT.md)

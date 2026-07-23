@@ -64,7 +64,7 @@ export function getTTLDays(keyword_type: string, intent: string, keyword: string
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function cacheKey(keyword: string): string {
-  return createHash('sha256').update(keyword.trim().toLowerCase()).digest('hex').slice(0, 20);
+  return createHash('sha256').update(`${keyword.trim().toLowerCase()}|cpc-thb-v1`).digest('hex').slice(0, 20);
 }
 
 function ensureDir() {
@@ -88,6 +88,7 @@ export function readDFSCache(keyword: string, keyword_type = 'default', intent =
     if (!existsSync(file)) return { hit: false };
 
     const entry: DFSCacheEntry = JSON.parse(readFileSync(file, 'utf-8'));
+    if (entry.metric.cpc_conversion_available === false) return { hit: false };
     const ageDays = (Date.now() - new Date(entry.cached_at).getTime()) / (1000 * 60 * 60 * 24);
     const ttl = getTTLDays(keyword_type, intent, keyword);
     const expired = ageDays > ttl;

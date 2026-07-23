@@ -309,7 +309,8 @@ function escapeCsvField(value: string | number): string {
 const SIMPLE_COLS = ['No.', 'Title (H1)', 'Keyword', 'Volume'];
 const FULL_COLS = [
   'No.', 'Title (H1)', 'Keyword', 'Volume',
-  'Competition', 'Competition Index', 'Low CPC', 'High CPC',
+  'Competition', 'Competition Index', 'Low CPC (THB)', 'High CPC (THB)',
+  'CPC Original Currency', 'CPC to THB Rate', 'CPC FX As Of',
   'Intent', 'Keyword Type', 'Priority', 'Opportunity Score', 'Content Type', 'Notes',
 ];
 
@@ -332,8 +333,11 @@ export function buildCsvString(rows: EnrichedKeyword[], outputMode: OutputMode):
         ...base,
         'Competition': r.competition ?? '',
         'Competition Index': r.competition_index ?? '',
-        'Low CPC': r.low_cpc ?? '',
-        'High CPC': r.high_cpc ?? '',
+        'Low CPC (THB)': r.low_cpc ?? '',
+        'High CPC (THB)': r.high_cpc ?? '',
+        'CPC Original Currency': r.cpc_original_currency ?? '',
+        'CPC to THB Rate': r.cpc_to_thb_rate ?? '',
+        'CPC FX As Of': r.cpc_rate_as_of ?? '',
         'Intent': r.intent,
         'Keyword Type': r.keyword_type,
         'Priority': r.priority,

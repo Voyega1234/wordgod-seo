@@ -13,8 +13,8 @@
  */
 
 import { callGeminiWithGrounding } from '../gemini';
-import type { GroundingMetadata } from '../gemini';
 import type { JourneyStage, StrategyMode, WebsiteType, AISearchRisk } from '../pipeline/wordgodPipeline';
+import { countWords, segmentWords } from '../text/thai';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -331,7 +331,7 @@ export function classifyAISearchRisk(
     /^.{0,15}หมายถึงอะไร\??$/,
     /^.{0,15}แปลว่าอะไร\??$/,
   ];
-  const isShortDefinition = highRiskPatterns.some(p => p.test(kw)) && kw.split(/\s+/).length <= 4;
+  const isShortDefinition = highRiskPatterns.some(p => p.test(kw)) && countWords(kw, /[\u0E00-\u0E7F]/.test(kw) ? 'th' : 'en') <= 4;
 
   if (isShortDefinition) return { risk: 'high', ai_resilience_score: 25 };
 
@@ -363,27 +363,58 @@ export function classifyAISearchRisk(
 // Rule-based article grouping — zero Gemini cost.
 // Groups by intent + journey_stage combination, marks standalone by default.
 export async function runArticleGroupingDecisionEngine(
-  keywords: Array<{ keyword: string; intent: string; volume: number; journey_stage?: string }>,
+  keywords: Array<{
+    keyword: string;
+    intent: string;
+    volume: number;
+    journey_stage?: string;
+    keyword_group?: string;
+    parent_topic?: string;
+    topic_cluster_role?: string;
+  }>,
   niche: string,
   onProgress: (msg: string) => void
 ): Promise<Map<string, ArticleGroupDecision>> {
   onProgress(`[Article grouping] Grouping ${keywords.length} keywords (rule-based)...`);
   const resultMap = new Map<string, ArticleGroupDecision>();
 
-  // Group by intent+journey_stage bucket
+  const genericTokens = new Set(['คือ', 'อะไร', 'วิธี', 'ที่', 'และ', 'หรือ', 'สำหรับ', 'how', 'what', 'best']);
+  const semanticTopic = (keyword: typeof keywords[number]) => {
+    if (keyword.parent_topic) return keyword.parent_topic;
+    if (keyword.keyword_group && !['parent_topic', 'supporting_topic'].includes(keyword.keyword_group)) {
+      return keyword.keyword_group;
+    }
+    const tokens = segmentWords(keyword.keyword, /[\u0E00-\u0E7F]/.test(keyword.keyword) ? 'th' : 'en')
+      .filter(token => token.length > 1 && !genericTokens.has(token));
+    return tokens.slice(0, 2).join(' ') || niche;
+  };
+
+  const intentFamily = (intent: string) => {
+    if (['transactional', 'service_seeking', 'price'].includes(intent)) return 'bofu';
+    if (['commercial', 'comparison', 'review'].includes(intent)) return 'mofu';
+    return 'tofu';
+  };
+
+  // Semantic topic is the primary grouping key. Intent family prevents a broad
+  // informational guide and a conversion page from being merged accidentally.
   const buckets = new Map<string, typeof keywords>();
   for (const kw of keywords) {
-    const key = `${kw.intent}__${kw.journey_stage ?? 'general'}`;
+    const key = `${semanticTopic(kw)}__${intentFamily(kw.intent)}`;
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key)!.push(kw);
   }
 
   for (const [bucketKey, group] of buckets.entries()) {
-    const [intent, journeyStage] = bucketKey.split('__');
-    // Sort by volume desc — highest volume becomes primary
-    group.sort((a, b) => b.volume - a.volume);
+    const [topic, funnel] = bucketKey.split('__');
+    // A declared parent topic wins; volume is the tie-breaker.
+    group.sort((a, b) => {
+      const roleA = a.topic_cluster_role === 'parent_topic' ? 1 : 0;
+      const roleB = b.topic_cluster_role === 'parent_topic' ? 1 : 0;
+      return roleB - roleA || b.volume - a.volume;
+    });
     const [primary, ...rest] = group;
-    const groupLabel = `${intent}_${journeyStage}`.replace(/[^a-z_]/g, '_');
+    const groupLabel = `${topic}_${funnel}`.replace(/[^\p{L}\p{N}_-]/gu, '_');
+    const conversionTarget = group.find(kw => intentFamily(kw.intent) === 'bofu')?.keyword;
 
     // Primary keyword: standalone (or merge if multiple in bucket)
     const mergeOrSplit: 'merge' | 'split' | 'standalone' = group.length >= 3 ? 'merge' : 'standalone';
@@ -393,7 +424,7 @@ export async function runArticleGroupingDecisionEngine(
       merge_or_split: mergeOrSplit,
       primary_keyword: primary.keyword,
       secondary_keywords: rest.map(k => k.keyword),
-      internal_link_target: undefined,
+      internal_link_target: conversionTarget && conversionTarget !== primary.keyword ? conversionTarget : undefined,
       next_topic_ideas: [],
       notes: undefined,
     });
@@ -404,7 +435,7 @@ export async function runArticleGroupingDecisionEngine(
         merge_or_split: mergeOrSplit,
         primary_keyword: primary.keyword,
         secondary_keywords: [],
-        internal_link_target: undefined,
+        internal_link_target: primary.keyword,
         next_topic_ideas: [],
         notes: undefined,
       });
@@ -459,7 +490,7 @@ export function computeKnowledgeImpactScore(keyword: string, intent: string): nu
 }
 
 function computeDepthPotentialScore(keyword: string): number {
-  const words = keyword.trim().split(/\s+/).length;
+  const words = countWords(keyword, /[\u0E00-\u0E7F]/.test(keyword) ? 'th' : 'en');
   // long-tail has more specific depth
   if (words >= 5) return 80;
   if (words >= 4) return 70;
@@ -535,7 +566,7 @@ function computeTrustBuildingScore(keyword: string): number {
 }
 
 function computeContentGapScore(keyword: string): number {
-  const words = keyword.trim().split(/\s+/).length;
+  const words = countWords(keyword, /[\u0E00-\u0E7F]/.test(keyword) ? 'th' : 'en');
   if (words >= 4) return 70;
   if (words >= 3) return 55;
   return 40;
@@ -647,7 +678,7 @@ export function computeIntentBucketScore(
 
 export function computeKeywordDepthScore(keyword: string, topicClusterRole?: string): number {
   const kw = keyword.toLowerCase();
-  const words = kw.trim().split(/\s+/).length;
+  const words = countWords(kw, /[\u0E00-\u0E7F]/.test(kw) ? 'th' : 'en');
   let score = 0;
 
   // Length signal — longer = more specific = higher depth

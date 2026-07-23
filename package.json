@@ -2,6 +2,9 @@
   "name": "pbn-keyword-web",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "dev": "next dev --port 3030",
     "build": "next build",
@@ -9,21 +12,40 @@
     "lint": "eslint",
     "test": "npx ts-node --project tsconfig.test.json lib/skills/keyword-seo-title/skill.test.ts",
     "test:ads": "npx ts-node --project tsconfig.test.json lib/services/googleKeywordPlanner.test.ts",
-    "test:all": "npm run test && npm run test:ads",
+    "test:plan": "npx ts-node --project tsconfig.test.json lib/planning/contentPlan.test.ts",
+    "test:metrics": "npx ts-node --project tsconfig.test.json lib/pipeline/keywordMetricPolicy.test.ts",
+    "test:currency": "npx ts-node --project tsconfig.test.json lib/services/cpcCurrency.test.ts",
+    "test:crawl": "npx ts-node --project tsconfig.test.json lib/services/siteCrawlService.test.ts",
+    "test:eeat": "npx ts-node --project tsconfig.test.json lib/skills/eeatSkill.test.ts",
+    "test:dfs-ranked": "npx ts-node --project tsconfig.test.json lib/services/dataForSeoService.rankedKeywords.test.ts",
+    "test:serp": "npx ts-node --project tsconfig.test.json lib/services/dataForSeoService.serp.test.ts",
+    "test:rankval": "npx ts-node --project tsconfig.test.json lib/pipeline/rankValidation.test.ts",
+    "test:eeat-gemini": "npx ts-node --project tsconfig.test.json lib/skills/eeatGeminiSkill.test.ts",
+    "test:kpmetrics": "npx ts-node --project tsconfig.test.json lib/pipeline/kpMetrics.test.ts",
+    "test:sparkline": "npx ts-node --project tsconfig.test.json lib/export/nativeSparkline.test.ts",
+    "test:taxonomy": "npx ts-node --project tsconfig.test.json lib/pipeline/siteTaxonomy.test.ts",
+    "test:title": "npx ts-node --project tsconfig.test.json lib/pipeline/titleScoring.test.ts",
+    "test:titleai": "npx ts-node --project tsconfig.test.json lib/skills/seoTitleAiSkill.test.ts",
+    "test:html": "npx ts-node --project tsconfig.test.json lib/export/planHtml.test.ts",
+    "test:all": "npm run test && npm run test:ads && npm run test:plan && npm run test:metrics && npm run test:currency && npm run test:crawl && npm run test:eeat && npm run test:dfs-ranked && npm run test:serp && npm run test:rankval && npm run test:eeat-gemini && npm run test:kpmetrics && npm run test:sparkline && npm run test:taxonomy && npm run test:title && npm run test:titleai && npm run test:html",
     "token": "npx ts-node --project tsconfig.test.json scripts/generate-refresh-token.ts"
   },
   "dependencies": {
     "@ai-sdk/google-vertex": "^5.0.5",
+    "@supabase/ssr": "^0.12.3",
+    "@supabase/supabase-js": "^2.110.8",
     "@vercel/oidc": "^3.7.1",
     "ai": "^7.0.9",
     "csv-parse": "^7.0.0",
     "csv-stringify": "^6.8.0",
+    "exceljs": "^4.4.0",
     "google-auth-library": "^10.9.0",
     "next": "16.2.9",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@next/swc-darwin-arm64": "^16.2.9",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
@@ -33,5 +55,8 @@
     "tailwindcss": "^4",
     "ts-node": "^10.9.2",
     "typescript": "^5"
+  },
+  "overrides": {
+    "brace-expansion": "1.1.16"
   }
 }

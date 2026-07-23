@@ -22,10 +22,14 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { runWordGodPipeline } from '@/lib/pipeline/wordgodPipeline';
+import { authorizeApiRequest } from '@/lib/auth/access';
 
 export const maxDuration = 800; // Vercel Pro max — pipeline needs long runtime for large keyword runs
 
 export async function POST(req: NextRequest) {
+  const denied = await authorizeApiRequest(req);
+  if (denied) return denied;
+
   const body = await req.json();
   const {
     seeds, niche, businessContext, category, targetLanguage, targetCount,
@@ -34,6 +38,7 @@ export async function POST(req: NextRequest) {
     real_customer_questions, faq_from_sales_team, faq_from_customer_service,
     journey_stages, strategy_mode, ai_search_optimization, website_type,
     site_url, site_context_summary, site_categories,
+    mode, planMonths, articlesPerMonth, planStartMonth, planPillars, metricMode,
   } = body;
 
   if (!seeds || !Array.isArray(seeds) || seeds.length === 0) {
@@ -57,6 +62,7 @@ export async function POST(req: NextRequest) {
         category: category || niche || 'General',
         targetLanguage: targetLanguage || 'th',
         targetCount: Math.min(targetCount || 50, 3000),
+        metricMode: metricMode === 'api_first' ? 'api_first' : 'api_only',
         intentRatio: intentRatio || undefined,
         presetKey: presetKey || undefined,
         excludeKeywords: excludeKeywords || [],
@@ -78,6 +84,11 @@ export async function POST(req: NextRequest) {
         site_url: site_url || undefined,
         site_context_summary: site_context_summary || undefined,
         site_categories: site_categories || undefined,
+        mode: mode === 'full_plan' ? 'full_plan' : 'quick_research',
+        planMonths: Math.min(Math.max(Number(planMonths) || 12, 1), 12),
+        articlesPerMonth: Math.min(Math.max(Number(articlesPerMonth) || 12, 1), 50),
+        planStartMonth: /^\d{4}-\d{2}$/.test(planStartMonth || '') ? planStartMonth : new Date().toISOString().slice(0, 7),
+        planPillars: Array.isArray(planPillars) ? planPillars : undefined,
       });
 
       send({ type: 'done', result });

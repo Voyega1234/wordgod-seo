@@ -10,9 +10,9 @@
 import {
   normalizeCustomerId,
   validateGoogleAdsConfig,
-  loadGoogleAdsConfig,
   handleGoogleAdsApiError,
   GoogleAdsApiError,
+  getGoogleAdsAccountCurrency,
 } from './googleKeywordPlannerService';
 import { buildCacheKey } from '../cache/keywordPlannerCache';
 import { runKeywordResearchSeoTitleSkillAsync } from '../skills/keyword-seo-title';
@@ -190,6 +190,40 @@ async function testAsyncSkillFallback() {
   }
 }
 
+// ─── Test: Google Ads account currency lookup ────────────────────────────────
+
+async function testGoogleAdsAccountCurrency() {
+  console.log('\n[Unit] getGoogleAdsAccountCurrency');
+  const config: GoogleAdsConfig = {
+    developerToken: 'dev-token',
+    clientId: 'client-id',
+    clientSecret: 'client-secret',
+    refreshToken: 'refresh-token',
+    customerId: '1234567890',
+    loginCustomerId: '9999999999',
+    apiVersion: 'v21',
+  };
+  const originalFetch = global.fetch;
+  let requestBody = '';
+  let requestUrl = '';
+  try {
+    global.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      requestUrl = String(input);
+      requestBody = String(init?.body || '');
+      return new Response(JSON.stringify({
+        results: [{ customer: { currencyCode: 'THB' } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+
+    const currency = await getGoogleAdsAccountCurrency(config, 'access-token');
+    assert(currency === 'THB', 'อ่าน customer.currency_code จากบัญชีจริง');
+    assert(requestUrl.includes('/customers/1234567890/googleAds:search'), 'query ที่ client customer ID');
+    assert(requestBody.includes('customer.currency_code'), 'GAQL ขอเฉพาะ currency_code');
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
 // ─── Test: async skill — metadata when non-API volume_source ──────────────────
 
 async function testAsyncSkillNonApiMode() {
@@ -241,7 +275,7 @@ async function runAll() {
     catch (e: any) { console.error(`  ✗ ${e.message}`); failed++; }
   }
 
-  const asyncTests = [testAsyncSkillFallback, testAsyncSkillNonApiMode];
+  const asyncTests = [testGoogleAdsAccountCurrency, testAsyncSkillFallback, testAsyncSkillNonApiMode];
   for (const t of asyncTests) {
     try { await t(); passed++; }
     catch (e: any) { console.error(`  ✗ ${e.message}`); failed++; }

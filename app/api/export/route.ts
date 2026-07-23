@@ -10,8 +10,13 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { stringify } from 'csv-stringify/sync';
+import { authorizeApiRequest } from '@/lib/auth/access';
+import { isDirectMetricSource } from '@/lib/pipeline/keywordMetricPolicy';
 
 export async function POST(req: NextRequest) {
+  const denied = await authorizeApiRequest(req);
+  if (denied) return denied;
+
   const { rows, mode } = await req.json();
 
   if (!rows || rows.length === 0) {
@@ -31,7 +36,7 @@ export async function POST(req: NextRequest) {
       'No.': idx + 1,
       'Title (H1)': r.title || '',
       'Keyword': r.keyword || '',
-      'Volume': isNewFormat ? (r.volume ?? '') : (r.volume_estimate ?? ''),
+      'Volume': isNewFormat && isDirectMetricSource(r.volume_source) ? (r.volume ?? '') : (isNewFormat ? '' : (r.volume_estimate ?? '')),
       'AEO Question': r.aeo_question || '',
     }));
     csv = stringify(data, { header: true, columns: cols, bom: true });
@@ -41,7 +46,8 @@ export async function POST(req: NextRequest) {
     if (isNewFormat) {
       const cols = [
         'No.', 'Title (H1)', 'AEO Question', 'Keyword',
-        'Volume', 'Volume Source', 'Competition', 'Competition Index',
+        'Volume', 'AI Estimate (Reference)', 'Volume Source', 'CPC (THB)',
+        'CPC Original Currency', 'CPC to THB Rate', 'CPC FX As Of', 'Competition', 'Competition Index',
         'Intent', 'Intent Mix Preset', 'Keyword Type', 'Content Type',
         'Opportunity Score', 'Priority',
         'SEO Score', 'AEO Score', 'AI Search Score', 'CTR Score',
@@ -82,11 +88,16 @@ export async function POST(req: NextRequest) {
         'Title (H1)': r.title || '',
         'AEO Question': r.aeo_question || '',
         'Keyword': r.keyword || '',
-        'Volume': r.volume ?? '',
+        'Volume': isDirectMetricSource(r.volume_source) ? (r.volume ?? '') : '',
+        'AI Estimate (Reference)': r.estimated_volume ?? '',
         'Volume Source': r.volume_source === 'keyword_planner' ? 'KP (exact)' :
-                         r.volume_source === 'planner_variant' ? 'KP (~variant ×0.3)' :
+                         r.volume_source === 'planner_variant' ? 'Derived variant (not exact)' :
                          r.volume_source === 'dataforseo' ? 'DataForSEO' :
                          r.volume_source === 'gemini_estimated' ? 'Estimated' : (r.volume_source || ''),
+        'CPC (THB)': isDirectMetricSource(r.volume_source) && typeof r.cpc === 'number' && r.cpc > 0 ? r.cpc : '',
+        'CPC Original Currency': isDirectMetricSource(r.volume_source) ? (r.cpc_original_currency || '') : '',
+        'CPC to THB Rate': isDirectMetricSource(r.volume_source) ? (r.cpc_to_thb_rate ?? '') : '',
+        'CPC FX As Of': isDirectMetricSource(r.volume_source) ? (r.cpc_rate_as_of || '') : '',
         'Competition': r.competition || '',
         'Competition Index': r.competition_index ?? '',
         'Intent': r.intent || '',

@@ -30,14 +30,14 @@ export interface SiteContext {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function normalizeUrl(input: string): string {
+export function normalizeUrl(input: string): string {
   let url = input.trim();
   if (!url.startsWith('http')) url = 'https://' + url;
   // Remove trailing slash
   return url.replace(/\/$/, '');
 }
 
-function extractTextFromHtml(html: string, maxChars = 1500): string {
+export function extractTextFromHtml(html: string, maxChars = 1500): string {
   return html
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
@@ -50,7 +50,7 @@ function extractTextFromHtml(html: string, maxChars = 1500): string {
     .slice(0, maxChars);
 }
 
-function extractTitle(html: string): string {
+export function extractTitle(html: string): string {
   const m = html.match(/<title[^>]*>([^<]+)<\/title>/i);
   return m ? m[1].trim() : '';
 }
@@ -73,7 +73,7 @@ async function safeFetch(url: string, timeoutMs = 8000): Promise<string | null> 
 
 // ─── Sitemap parser ───────────────────────────────────────────────────────────
 
-function parseSitemapUrls(xml: string): string[] {
+export function parseSitemapUrls(xml: string): string[] {
   const urls: string[] = [];
   const matches = xml.matchAll(/<loc>\s*([^<]+)\s*<\/loc>/gi);
   for (const m of matches) {
@@ -97,14 +97,12 @@ async function fetchSitemap(baseUrl: string): Promise<{ urls: string[]; sitemapU
 
     let urls = parseSitemapUrls(xml);
 
-    // Handle sitemap index — fetch child sitemaps (first 3 only)
+    // Handle sitemap indexes broadly enough for real sites while keeping a
+    // deterministic safety cap. Fetch independent child sitemaps in parallel.
     if (xml.includes('<sitemapindex') || xml.includes('<sitemap>')) {
-      const childSitemaps = urls.filter(u => u.endsWith('.xml')).slice(0, 3);
-      const childUrls: string[] = [];
-      for (const child of childSitemaps) {
-        const childXml = await safeFetch(child, 6000);
-        if (childXml) childUrls.push(...parseSitemapUrls(childXml));
-      }
+      const childSitemaps = urls.filter(u => /\.xml(?:\?|$)/i.test(u)).slice(0, 25);
+      const children = await Promise.all(childSitemaps.map(child => safeFetch(child, 6000)));
+      const childUrls = children.flatMap(childXml => childXml ? parseSitemapUrls(childXml) : []);
       if (childUrls.length > 0) urls = childUrls;
     }
 
@@ -116,7 +114,7 @@ async function fetchSitemap(baseUrl: string): Promise<{ urls: string[]; sitemapU
 
 // ─── Category extractor ────────────────────────────────────────────────────────
 
-function extractCategories(urls: string[], baseUrl: string): SiteCategory[] {
+export function extractCategories(urls: string[], baseUrl: string): SiteCategory[] {
   const countMap = new Map<string, { count: number; url: string }>();
 
   for (const url of urls) {
@@ -125,7 +123,10 @@ function extractCategories(urls: string[], baseUrl: string): SiteCategory[] {
       const segments = path.split('/').filter(Boolean);
       if (segments.length === 0) continue;
 
-      const topSlug = segments[0];
+      const localeSegments = new Set(['th', 'en', 'th-th', 'en-th', 'en-us']);
+      const contentSegments = localeSegments.has(segments[0].toLowerCase()) ? segments.slice(1) : segments;
+      const topSlug = contentSegments[0];
+      if (!topSlug) continue;
       // Skip common non-content slugs
       if (['tag', 'tags', 'author', 'page', 'feed', 'wp-content', 'wp-admin', 'cdn', 'static', 'assets'].includes(topSlug)) continue;
 
@@ -156,7 +157,7 @@ function findKeyPages(urls: string[], baseUrl: string): string[] {
   const patterns = [
     /\/(about|about-us|เกี่ยวกับ|เกี่ยวกับเรา|about_us)\/?$/i,
     /\/(contact|contact-us|ติดต่อ|ติดต่อเรา)\/?$/i,
-    /^\/?$/,  // home
+    /\/(product|products|service|services|loan|loans|credit|credit-line|insurance|saving|savings|account|accounts|card|cards|debit|pricing|ราคา)(?:\/|$)/i,
   ];
 
   const found: string[] = [baseUrl]; // always include home
@@ -170,9 +171,9 @@ function findKeyPages(urls: string[], baseUrl: string): string[] {
         }
       }
     } catch {}
-    if (found.length >= 4) break;
+    if (found.length >= 12) break;
   }
-  return found.slice(0, 4);
+  return found.slice(0, 12);
 }
 
 // ─── Main function ────────────────────────────────────────────────────────────
@@ -198,7 +199,7 @@ export async function crawlSiteContext(rawUrl: string): Promise<SiteContext> {
     // Step 2: Find key pages to scrape
     const keyPageUrls = findKeyPages(sitemap.urls, baseUrl);
 
-    // Step 3: Scrape key pages in parallel (max 4)
+    // Step 3: Scrape key pages in parallel (max 12)
     const scrapedPages = await Promise.all(
       keyPageUrls.map(async (url) => {
         const html = await safeFetch(url, 8000);
@@ -253,6 +254,13 @@ export function buildSiteContextSummary(ctx: SiteContext): string {
   if (ctx.categories.length > 0) {
     const cats = ctx.categories.slice(0, 15).map(c => `${c.label} (${c.count ?? '?'} pages)`).join(', ');
     lines.push(`Website categories: ${cats}`);
+  }
+  if (ctx.key_pages.length > 0) {
+    const pages = ctx.key_pages
+      .slice(0, 12)
+      .map(page => `${page.title || 'Untitled'} — ${page.url}`)
+      .join('\n');
+    lines.push(`Existing important pages (avoid cannibalization and use as internal-link targets):\n${pages}`);
   }
 
   return lines.join('\n\n');

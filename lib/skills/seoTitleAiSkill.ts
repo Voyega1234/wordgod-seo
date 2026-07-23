@@ -69,3 +69,28 @@ ${kwList}
 Return JSON only:
 {"titles":[{"keyword":"...","title":"...","aeo_question":"...","seo_score":8,"aeo_score":8,"ai_search_score":8,"ctr_score":7,"notes":"..."}]}`;
 }
+
+/**
+ * Compact few-shot block of REAL competitor titles already ranking on Google's
+ * first page — reused from the SERP rank-check step, so it costs no extra API
+ * call. Prepend it to a title prompt so the model differentiates against what's
+ * ranking instead of echoing it. Returns '' when there is nothing usable, so
+ * callers can prepend unconditionally.
+ */
+export function buildSerpFewShotBlock(
+  entries: Array<{ keyword: string; competitorTitles: string[] }>,
+): string {
+  const lines: string[] = [];
+  for (const entry of entries) {
+    const titles = (entry.competitorTitles || [])
+      .map(t => (t || '').trim())
+      .filter(Boolean)
+      .slice(0, 5);
+    if (titles.length === 0) continue;
+    lines.push(`- "${entry.keyword}": ${titles.map(t => `“${t}”`).join(' | ')}`);
+  }
+  if (lines.length === 0) return '';
+  return `### บริบทคู่แข่งจาก Google (title ที่ติดหน้าแรกจริงของคีย์เวิร์ดนี้)
+ใช้เป็นข้อมูลอ้างอิงเชิงมุมเท่านั้น — เขียน title ที่ "ต่าง" และ "ดีกว่า" ห้ามลอกหรือดัดแปลงเพียงเล็กน้อย และห้ามใส่ชื่อแบรนด์คู่แข่ง:
+${lines.join('\n')}`;
+}

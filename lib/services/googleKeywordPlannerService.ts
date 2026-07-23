@@ -11,6 +11,12 @@
 
 import type { GoogleAdsConfig, KeywordPlannerResult, KeywordPlannerRow, SkillInput } from '../skills/keyword-seo-title/types';
 import { readKeywordPlannerCache, writeKeywordPlannerCache, buildCacheKey } from '../cache/keywordPlannerCache';
+import {
+  CPC_OUTPUT_CURRENCY,
+  convertMicrosToCpcCurrency,
+  getCpcConversion,
+  type CpcConversion,
+} from './cpcCurrency';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -100,6 +106,57 @@ export class GoogleAdsApiError extends Error {
   }
 }
 
+interface GoogleAdsCpcContext {
+  originalCurrency: string;
+  conversion: CpcConversion | null;
+  warning?: string;
+}
+
+export async function getGoogleAdsAccountCurrency(
+  config: GoogleAdsConfig,
+  accessToken: string
+): Promise<string> {
+  const endpoint = `https://googleads.googleapis.com/${config.apiVersion}/customers/${config.customerId}/googleAds:search`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'developer-token': config.developerToken,
+      'Content-Type': 'application/json',
+      ...(config.loginCustomerId ? { 'login-customer-id': config.loginCustomerId } : {}),
+    },
+    body: JSON.stringify({ query: 'SELECT customer.currency_code FROM customer LIMIT 1' }),
+  });
+  const responseText = await response.text();
+  if (!response.ok) handleGoogleAdsApiError(response.status, responseText);
+
+  const data = JSON.parse(responseText);
+  const currency = String(data.results?.[0]?.customer?.currencyCode || '').trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currency)) {
+    throw new GoogleAdsApiError('Google Ads account currency_code was not returned', 'CURRENCY_ERROR');
+  }
+  return currency;
+}
+
+async function resolveGoogleAdsCpcContext(
+  config: GoogleAdsConfig,
+  accessToken: string
+): Promise<GoogleAdsCpcContext> {
+  let originalCurrency = 'UNKNOWN';
+  try {
+    originalCurrency = await getGoogleAdsAccountCurrency(config, accessToken);
+    const conversion = await getCpcConversion(originalCurrency);
+    return { originalCurrency, conversion };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      originalCurrency,
+      conversion: null,
+      warning: `Google Ads CPC was withheld because ${originalCurrency} could not be converted to THB: ${reason}. Search Volume remains usable.`,
+    };
+  }
+}
+
 // ─── Targeting helpers ────────────────────────────────────────────────────────
 
 // Common language constants
@@ -140,12 +197,7 @@ function mapCompetition(value: string | number | undefined): string {
   return 'UNSPECIFIED';
 }
 
-function microsToUnit(micros: number | undefined | null): number {
-  if (!micros || micros === 0) return 0;
-  return Math.round((micros / 1_000_000) * 100) / 100;
-}
-
-function mapKeywordIdeaToRow(idea: any): KeywordPlannerRow {
+function mapKeywordIdeaToRow(idea: any, cpcContext: GoogleAdsCpcContext): KeywordPlannerRow {
   const metrics = idea.keywordIdeaMetrics || {};
   const monthlySearches = metrics.monthlySearchVolumes || [];
   const monthlyTrend = monthlySearches
@@ -161,8 +213,13 @@ function mapKeywordIdeaToRow(idea: any): KeywordPlannerRow {
     volume: isNaN(avgVolume) ? 0 : avgVolume,
     competition: mapCompetition(metrics.competition),
     competition_index: parseInt(String(metrics.competitionIndex || '0'), 10),
-    low_cpc: microsToUnit(metrics.lowTopOfPageBidMicros),
-    high_cpc: microsToUnit(metrics.highTopOfPageBidMicros),
+    low_cpc: convertMicrosToCpcCurrency(metrics.lowTopOfPageBidMicros, cpcContext.conversion),
+    high_cpc: convertMicrosToCpcCurrency(metrics.highTopOfPageBidMicros, cpcContext.conversion),
+    cpc_currency: CPC_OUTPUT_CURRENCY,
+    cpc_original_currency: cpcContext.originalCurrency,
+    cpc_to_thb_rate: cpcContext.conversion?.rate,
+    cpc_rate_as_of: cpcContext.conversion?.rateAsOf,
+    cpc_rate_source: cpcContext.conversion?.rateSource,
     monthly_trend: monthlyTrend,
     source: 'google_keyword_planner_api',
   };
@@ -173,7 +230,8 @@ function mapKeywordIdeaToRow(idea: any): KeywordPlannerRow {
 async function generateKeywordIdeas(
   config: GoogleAdsConfig,
   accessToken: string,
-  input: SkillInput
+  input: SkillInput,
+  cpcContext: GoogleAdsCpcContext
 ): Promise<KeywordPlannerRow[]> {
   const allSeeds = input.seed_keywords || [];
   const url = input.website_url;
@@ -235,7 +293,9 @@ async function generateKeywordIdeas(
     const data = JSON.parse(rawText);
     slog(`API ok — results: ${data.results?.length ?? 0}, seeds: ${seedChunk.slice(0,3).join(',')}`);
     if (data.results?.length > 0) slog(`sample: ${JSON.stringify(data.results[0]).slice(0, 200)}`);
-    const rows = (data.results || []).map(mapKeywordIdeaToRow).filter((r: KeywordPlannerRow) => r.keyword);
+    const rows = (data.results || [])
+      .map((idea: any) => mapKeywordIdeaToRow(idea, cpcContext))
+      .filter((r: KeywordPlannerRow) => r.keyword);
     allRows.push(...rows);
   }
 
@@ -273,8 +333,16 @@ export interface MetricEntry {
   volume: number;
   competition: string;
   competition_index: number;
+  cpc: number;
+  cpc_low: number;
+  cpc_high: number;
+  cpc_currency: 'THB';
+  cpc_original_currency: string;
+  cpc_to_thb_rate?: number;
+  cpc_rate_as_of?: string;
+  cpc_rate_source?: string;
   source: 'exact' | 'close_variant';
-  variant_keyword?: string;  // the Planner keyword that provided volume (if close_variant)
+  variant_keyword?: string;  // legacy compatibility; new lookups never synthesize variant volume
 }
 
 export async function getHistoricalMetrics(
@@ -282,7 +350,8 @@ export async function getHistoricalMetrics(
   config: GoogleAdsConfig,
   accessToken: string,
   language: string = 'th',
-  country: string = 'Thailand'
+  country: string = 'Thailand',
+  onWarning?: (warning: string) => void
 ): Promise<Map<string, MetricEntry>> {
   const result = new Map<string, MetricEntry>();
   if (keywords.length === 0) return result;
@@ -292,6 +361,8 @@ export async function getHistoricalMetrics(
   // Use client account ID in endpoint path; MCC goes in login-customer-id header only
   const customerId = config.customerId;
   const endpoint = `https://googleads.googleapis.com/${config.apiVersion}/customers/${customerId}:generateKeywordIdeas`;
+  const cpcContext = await resolveGoogleAdsCpcContext(config, accessToken);
+  if (cpcContext.warning) onWarning?.(cpcContext.warning);
 
   // Chunk size 20 — max seeds per KP request; run 5 chunks in parallel for throughput
   const CHUNK = 20;
@@ -360,8 +431,6 @@ export async function getHistoricalMetrics(
         logLine(`sample item: ${JSON.stringify(data.results[0]).slice(0, 200)}`);
       }
 
-      const plannerResults: Array<{ plannerText: string; metrics: any }> = [];
-
       for (const item of (data.results || [])) {
         const rawText = (item.text || '').trim().toLowerCase();
         const plannerText = rawText.replace(/\s+/g, ' ');
@@ -370,53 +439,28 @@ export async function getHistoricalMetrics(
         const volume = metrics.avgMonthlySearches ? parseInt(String(metrics.avgMonthlySearches), 10) : 0;
         if (isNaN(volume) || volume < 0) continue;
 
-        plannerResults.push({ plannerText, metrics });
-
         const allForms = [plannerText, ...closeVariants];
         const matchedInput = [...inputSet].find(inp =>
           allForms.some(form => form === inp || form.replace(/\s/g, '') === inp.replace(/\s/g, ''))
         );
         if (matchedInput && !result.has(matchedInput)) {
+          const cpcLow = convertMicrosToCpcCurrency(metrics.lowTopOfPageBidMicros, cpcContext.conversion);
+          const cpcHigh = convertMicrosToCpcCurrency(metrics.highTopOfPageBidMicros, cpcContext.conversion);
           result.set(matchedInput, {
             volume,
             competition: mapCompetition(metrics.competition),
             competition_index: parseInt(String(metrics.competitionIndex || '0'), 10),
+            cpc: cpcLow && cpcHigh ? (cpcLow + cpcHigh) / 2 : cpcHigh || cpcLow || 0,
+            cpc_low: cpcLow,
+            cpc_high: cpcHigh,
+            cpc_currency: CPC_OUTPUT_CURRENCY,
+            cpc_original_currency: cpcContext.originalCurrency,
+            cpc_to_thb_rate: cpcContext.conversion?.rate,
+            cpc_rate_as_of: cpcContext.conversion?.rateAsOf,
+            cpc_rate_source: cpcContext.conversion?.rateSource,
             source: 'exact',
           });
           logLine(`exact: "${matchedInput}" vol=${volume}`);
-        }
-      }
-
-      const CLOSE_VARIANT_DISCOUNT = 0.3;
-      const MIN_SHARED_WORDS = 2;
-
-      for (const inp of inputSet) {
-        if (result.has(inp)) continue;
-        const inpWords = new Set(inp.split(/\s+/).filter(w => w.length > 1));
-        if (inpWords.size === 0) continue;
-
-        let bestScore = 0;
-        let bestResult: { plannerText: string; metrics: any } | null = null;
-        for (const pr of plannerResults) {
-          const prWords = pr.plannerText.split(/\s+/);
-          const shared = prWords.filter(w => inpWords.has(w)).length;
-          if (shared > bestScore) { bestScore = shared; bestResult = pr; }
-        }
-
-        if (bestResult && bestScore >= MIN_SHARED_WORDS) {
-          const rawVol = bestResult.metrics.avgMonthlySearches
-            ? parseInt(String(bestResult.metrics.avgMonthlySearches), 10) : 0;
-          if (!isNaN(rawVol) && rawVol > 0) {
-            const discountedVol = Math.round(rawVol * CLOSE_VARIANT_DISCOUNT);
-            result.set(inp, {
-              volume: discountedVol,
-              competition: mapCompetition(bestResult.metrics.competition),
-              competition_index: parseInt(String(bestResult.metrics.competitionIndex || '0'), 10),
-              source: 'close_variant',
-              variant_keyword: bestResult.plannerText,
-            });
-            logLine(`close_variant: "${inp}" ← "${bestResult.plannerText}" vol=${rawVol}×0.3=${discountedVol}`);
-          }
         }
       }
     } catch (err) {
@@ -443,7 +487,7 @@ export async function getKeywordPlannerRows(input: SkillInput): Promise<KeywordP
   }
 
   // Cache check
-  const cacheKey = buildCacheKey(input);
+  const cacheKey = buildCacheKey(input, `${config!.customerId}|cpc-thb-v1`);
   if (!input.force_refresh) {
     const cached = readKeywordPlannerCache(cacheKey);
     if (cached) {
@@ -453,7 +497,8 @@ export async function getKeywordPlannerRows(input: SkillInput): Promise<KeywordP
 
   try {
     const accessToken = await getAccessToken(config!);
-    const rows = await generateKeywordIdeas(config!, accessToken, input);
+    const cpcContext = await resolveGoogleAdsCpcContext(config!, accessToken);
+    const rows = await generateKeywordIdeas(config!, accessToken, input, cpcContext);
 
     if (rows.length === 0) {
       return {
@@ -463,10 +508,15 @@ export async function getKeywordPlannerRows(input: SkillInput): Promise<KeywordP
       };
     }
 
-    // Write cache
-    writeKeywordPlannerCache(cacheKey, rows);
+    // Do not cache rows whose CPC conversion failed. This lets the next run
+    // retry the exchange-rate lookup instead of retaining blank CPC for 30 days.
+    if (cpcContext.conversion) writeKeywordPlannerCache(cacheKey, rows);
 
-    return { success: true, rows };
+    return {
+      success: true,
+      rows,
+      warnings: cpcContext.warning ? [cpcContext.warning] : undefined,
+    };
   } catch (err: any) {
     return {
       success: false,

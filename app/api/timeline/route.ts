@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { authorizeApiRequest } from '@/lib/auth/access';
 
 const THAI_HOLIDAYS: Record<string, string> = {
   '01-01': 'วันขึ้นปีใหม่',
@@ -161,6 +162,9 @@ function enforceClusterOrder(sorted: any[]): any[] {
 }
 
 export async function POST(req: NextRequest) {
+  const denied = await authorizeApiRequest(req);
+  if (denied) return denied;
+
   const { keywords, days, startDate: rawStart } = await req.json();
   if (!keywords || !Array.isArray(keywords) || !days) {
     return NextResponse.json({ error: 'keywords[] and days required' }, { status: 400 });

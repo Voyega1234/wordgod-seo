@@ -1,5 +1,6 @@
 import { callGemini } from '../gemini';
 import type { PipelineKeyword } from '../pipeline/wordgodPipeline';
+import { segmentWords } from '../text/thai';
 
 export interface ClusterKeyword {
   keyword: string;
@@ -31,14 +32,11 @@ const SLUG_STOPWORDS = new Set([
 ]);
 
 function sanitizeSlug(slug: string): string {
-  return slug
-    .toLowerCase()
-    .trim()
-    .replace(/[^\w\s-]/g, '')
-    .split(/[\s-]+/)
+  return segmentWords(slug.toLowerCase().trim(), /[\u0E00-\u0E7F]/.test(slug) ? 'th' : 'en')
     .filter(w => w && !SLUG_STOPWORDS.has(w))
     .slice(0, 5)
     .join('-')
+    .replace(/[^\p{L}\p{N}-]/gu, '')
     .substring(0, 50);
 }
 

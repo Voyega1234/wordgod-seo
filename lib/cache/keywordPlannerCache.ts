@@ -19,7 +19,7 @@ export interface CacheEntry {
   cached_at: string;
 }
 
-export function buildCacheKey(input: SkillInput): string {
+export function buildCacheKey(input: SkillInput, namespace = ''): string {
   const parts = [
     (input.seed_keywords || []).sort().join(','),
     input.website_url || '',
@@ -27,6 +27,7 @@ export function buildCacheKey(input: SkillInput): string {
     input.target_language || 'th',
     input.keyword_plan_network || 'GOOGLE_SEARCH',
     input.volume_source || '',
+    namespace,
   ].join('|');
   return createHash('sha256').update(parts).digest('hex').slice(0, 16);
 }

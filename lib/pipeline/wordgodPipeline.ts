@@ -4,7 +4,7 @@
  * Flow:
  *   1. Google Keyword Planner → real volume, competition, CPC per keyword
  *   2. Gemini grounding → expand & discover new keywords with volume signals
- *   3. Merge & deduplicate — Planner data takes priority over Gemini estimates
+ *   3. Merge & deduplicate — direct provider data is separated from AI references
  *   4. SEO Title AI Skill → Gemini writes titles optimized for SEO + AEO + AI Search
  *   5. Score & rank → opportunity score formula
  *   6. Return enriched rows ready for CSV export
@@ -13,10 +13,9 @@
  */
 
 import { callGeminiWithGrounding, callGemini, resetSessionUsage, getSessionUsage } from '../gemini';
-import type { GroundingMetadata } from '../gemini';
 import { buildGeminiCacheKey, readGeminiCache, writeGeminiCache } from '../cache/geminiCache';
 import { extractCompetitorKeywords } from '../skills/competitorUrlSkill';
-import { buildSeoTitleAiPrompt } from '../skills/seoTitleAiSkill';
+import { buildSeoTitleAiPrompt, buildSerpFewShotBlock } from '../skills/seoTitleAiSkill';
 import type { TitleRequest, TitleAiResult } from '../skills/seoTitleAiSkill';
 import { KEYWORD_RESEARCH_PROMPT } from '../skills/keywordResearchSkill';
 import { clusterKeywords } from '../skills/topicClusterSkill';
@@ -50,9 +49,22 @@ import type { AEOFields } from '../skills/aeoSkill';
 import { scoreCompetitorGap } from '../skills/competitorGapSkill';
 import { detectTrendSignal } from '../skills/trendSkill';
 import type { TrendType } from '../skills/trendSkill';
+import { countWords, segmentWords, tokenSimilarity } from '../text/thai';
+import { scoreTitle } from './titleScoring';
+import { buildContentPlan } from '../planning/contentPlan';
+import type { ContentPlanResult, PlanMode, PlanPillarInput } from '../planning/contentPlan';
+import type { CompetitorEntry } from './rankValidation';
+import {
+  getCandidateTarget,
+  isDirectMetricSource,
+  isMetricLookupCandidate,
+  summarizeMetricSources,
+} from './keywordMetricPolicy';
+import type { KeywordMetricMode, KeywordMetricSource } from './keywordMetricPolicy';
 
 export type { IntentRatio };
 export { DEFAULT_INTENT_RATIO };
+export type { KeywordMetricMode };
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -68,6 +80,7 @@ export interface PipelineInput {
   category: string;
   targetLanguage?: string;       // 'th' | 'en' (default: 'th')
   targetCount: number;           // total keywords to produce
+  metricMode?: KeywordMetricMode; // api_only | api_first (default: api_only)
   intentRatio?: IntentRatio;     // default: DEFAULT_INTENT_RATIO
   presetKey?: string;            // e.g. 'preset6' for knowledge mode
   excludeKeywords?: string[];    // keywords to never return
@@ -91,15 +104,35 @@ export interface PipelineInput {
   site_url?: string;
   site_context_summary?: string;   // pre-built summary from /api/crawl-site
   site_categories?: string[];      // top category slugs from sitemap
+  // Full content planning (independent from keyword count)
+  mode?: PlanMode;
+  planMonths?: number;             // 1-12
+  articlesPerMonth?: number;       // publishing capacity
+  planStartMonth?: string;         // YYYY-MM
+  planPillars?: PlanPillarInput[]; // optional money page + monthly quota per pillar
 }
 
 export interface PipelineKeyword {
   keyword: string;
-  volume: number;                // real (from Planner) or estimated (from Gemini)
-  volume_source: 'keyword_planner' | 'planner_variant' | 'dataforseo' | 'gemini_estimated';
+  volume: number;                // direct API metric only; 0 means unavailable
+  estimated_volume?: number;     // AI reference value, never presented as provider volume
+  volume_source: KeywordMetricSource;
   volume_proxy_keyword?: string;  // shortened keyword used as volume proxy (planner_variant only)
   competition: string;           // LOW | MEDIUM | HIGH | UNSPECIFIED
   competition_index: number;     // 0–100
+  organic_difficulty?: number;   // Organic KD 0-100 (DataForSEO Labs when available)
+  cpc?: number;                  // always THB; undefined when direct conversion is unavailable
+  cpc_low?: number;
+  cpc_high?: number;
+  cpc_currency?: 'THB';
+  cpc_original_currency?: string;
+  cpc_to_thb_rate?: number;
+  cpc_rate_as_of?: string;
+  cpc_rate_source?: string;
+  monthly_trend?: number[];      // KP trailing ~12-month search-volume series (chart/sparkline source)
+  metric_source?: string;
+  metric_as_of?: string;
+  metric_confidence?: 'high' | 'medium' | 'low';
   intent: string;
   keyword_type: string;
   content_type: string;
@@ -112,6 +145,7 @@ export interface PipelineKeyword {
   ai_search_score: number;
   ctr_score: number;
   title_notes: string;
+  title_quality_score?: number;  // independent deterministic title quality (0–100); see titleScoring
   // Problem-First + Intent-Bucket Layer (always populated after Step 3b)
   journey_stage?: JourneyStage;
   problem_group?: string;
@@ -141,6 +175,20 @@ export interface PipelineKeyword {
   // Short-tail parent reference — shows which KP keyword this long-tail was derived from
   seed_keyword?: string;           // the short-tail keyword from Planner (KP)
   seed_volume?: number;            // real KP volume of the short-tail parent
+  // Domain's existing ranking (from DFS ranked_keywords, Step 0.7) — the keyword the
+  // domain already ranks for and its current position. Phase 3 adds a freshly SERP-
+  // verified site_rank + confidence on top of this.
+  existing_rank?: number;            // current rank_group the domain holds for this keyword
+  existing_rank_url?: string;        // the domain URL currently ranking for it
+  existing_rank_source?: 'dfs_ranked_keywords';
+  is_base_seed?: boolean;            // keyword came from the domain's existing ranked set
+  // Phase 3 — freshly SERP-verified rank + top-5 competitors + multi-layer confidence.
+  site_rank?: number | null;         // L1: current position in DFS SERP (null = not in fetched depth)
+  rank_in_top5?: boolean;
+  rank_confidence?: 'high' | 'medium' | 'low';
+  rank_source?: 'dfs_serp';
+  rank_checked_at?: string;
+  competitors?: CompetitorEntry[];   // top-5 organic results for this keyword
   // AEO / AI Search / GEO layer (Step 3b supplement)
   aeo_opportunity?: AEOFields['aeo_opportunity'];
   aeo_opportunity_score?: number;
@@ -179,8 +227,17 @@ export interface PipelineKeyword {
 export interface PipelineResult {
   keywords: PipelineKeyword[];
   clusters: ClusterResult;
+  plan?: ContentPlanResult;
   meta: {
     total: number;
+    requested_count: number;
+    candidate_count: number;
+    metric_mode: KeywordMetricMode;
+    api_backed_count: number;
+    derived_count: number;
+    estimated_count: number;
+    shortfall_count: number;
+    cpc_currency: 'THB';
     planner_count: number;
     dataforseo_count: number;
     gemini_count: number;
@@ -202,8 +259,11 @@ export interface PipelineResult {
       gemini_cost_thb: number;
       // DataForSEO
       dfs_keywords_called: number;
+      dfs_kd_keywords_called?: number;
       dfs_cost_usd: number;
       dfs_cost_thb: number;
+      dfs_kd_cost_usd?: number;
+      dfs_kd_cost_thb?: number;
       // Google Keyword Planner (free — $0)
       kp_keywords_fetched: number;
       kp_cost_usd: number;
@@ -244,7 +304,7 @@ function classifyIntent(keyword: string): string {
 
 function classifyKeywordType(keyword: string): string {
   const kw = keyword.toLowerCase();
-  const words = kw.trim().split(/\s+/);
+  const wordCount = countWords(kw, /[\u0E00-\u0E7F]/.test(kw) ? 'th' : 'en');
   if (/เปรียบเทียบ|vs\./.test(kw)) return 'comparison';
   if (/ราคา|เท่าไร/.test(kw)) return 'price';
   if (/รีวิว/.test(kw)) return 'review';
@@ -252,8 +312,8 @@ function classifyKeywordType(keyword: string): string {
   if (/ปัญหา|แก้|รักษา/.test(kw)) return 'problem';
   if (/คืออะไร|ทำไม/.test(kw)) return 'question';
   if (/แนะนำ|ก่อนซื้อ|วิธีเลือก/.test(kw)) return 'commercial';
-  if (words.length >= 4) return 'long_tail';
-  if (words.length === 1) return 'seed';
+  if (wordCount >= 4) return 'long_tail';
+  if (wordCount === 1) return 'seed';
   return 'supporting_keyword';
 }
 
@@ -277,7 +337,9 @@ function computeOpportunity(
   volume: number,
   intent: string,
   keyword_type: string,
-  keyword: string
+  keyword: string,
+  organicDifficulty?: number,
+  competitionIndex = 0
 ): { score: number; priority: 'high' | 'medium' | 'low' } {
   const volScore =
     volume >= 100000 ? 10 : volume >= 50000 ? 9 : volume >= 20000 ? 8 :
@@ -295,19 +357,24 @@ function computeOpportunity(
     checklist: 6, seed: 6, supporting_keyword: 5, local: 5, seasonal: 4, brand: 4,
   };
 
-  const words = keyword.trim().split(/\s+/).length;
+  const words = countWords(keyword, /[\u0E00-\u0E7F]/.test(keyword) ? 'th' : 'en');
   const gap = words >= 4 ? 9 : words >= 3 ? 7 : words >= 2 ? 5 : 3;
-  const diff = words === 1 ? 15 : words === 2 ? 8 : words === 3 ? 4 : 0;
 
-  // Competition proxy: shorter keywords = harder to rank (higher difficulty penalty)
-  const compVal = words === 1 ? 2 : words === 2 ? 5 : words === 3 ? 7 : 9;
+  // Prefer a real organic KD. Paid competition is only a fallback and is never
+  // labelled as organic difficulty. Word count only supplies a low-confidence
+  // depth signal when neither metric exists.
+  const compVal = typeof organicDifficulty === 'number'
+    ? Math.max(0, Math.min(10, (100 - organicDifficulty) / 10))
+    : competitionIndex > 0
+      ? Math.max(1, Math.min(9, (100 - competitionIndex) / 10))
+      : Math.max(3, Math.min(8, gap));
 
   const raw =
     volScore * 10 * 0.30 +
     (intentVal[intent] ?? 5) * 10 * 0.25 +
     compVal * 10 * 0.20 +
     (typeVal[keyword_type] ?? 5) * 10 * 0.15 +
-    gap * 10 * 0.10 - diff;
+    gap * 10 * 0.10;
 
   const score = Math.max(0, Math.min(100, Math.round(raw)));
   const priority: 'high' | 'medium' | 'low' = score >= 80 ? 'high' : score >= 60 ? 'medium' : 'low';
@@ -468,7 +535,8 @@ function applyIntentBucketAllocation(
 
 async function fetchPlannerVolumes(
   seeds: string[],
-  input: PipelineInput
+  input: PipelineInput,
+  warnings?: string[]
 ): Promise<Map<string, { volume: number; competition: string; competition_index: number; source?: string }>> {
   const map = new Map<string, any>();
   try {
@@ -480,17 +548,30 @@ async function fetchPlannerVolumes(
       volume_source: 'google_keyword_planner_api',
       force_refresh: input.forceRefresh,
     } as any);
+    for (const warning of result.warnings ?? []) {
+      if (!warnings?.includes(warning)) warnings?.push(warning);
+    }
     if (result.success) {
       for (const row of result.rows) {
         map.set(normalize(row.keyword), {
           volume: row.volume,
           competition: row.competition,
           competition_index: row.competition_index,
+          cpc: row.low_cpc && row.high_cpc ? (row.low_cpc + row.high_cpc) / 2 : row.high_cpc || row.low_cpc || 0,
+          cpc_low: row.low_cpc,
+          cpc_high: row.high_cpc,
+          cpc_currency: row.cpc_currency,
+          cpc_original_currency: row.cpc_original_currency,
+          cpc_to_thb_rate: row.cpc_to_thb_rate,
+          cpc_rate_as_of: row.cpc_rate_as_of,
+          cpc_rate_source: row.cpc_rate_source,
+          monthly_trend: row.monthly_trend,
+          source: 'exact',
         });
       }
     }
   } catch (err: any) {
-    // Log the real error so we can diagnose — fall back to Gemini estimates
+    // Log the real error so we can diagnose; missing provider metrics stay blank.
     console.error('[KP] fetchPlannerVolumes error:', err?.message ?? err);
   }
   return map;
@@ -562,7 +643,9 @@ async function expandWithGemini(
         const siteSection = siteContextSummary
           ? `\n### WEBSITE CONTEXT (use this to keep keywords on-theme)\n${siteContextSummary}${siteCategories?.length ? `\n\nExisting site categories: ${siteCategories.join(', ')} — match keywords to these topics where possible` : ''}\n`
           : '';
-        const prompt = KEYWORD_RESEARCH_PROMPT(niche, seeds[0], need, [...excludeSet], alreadyFound, intentRatio, isKnowledgeMode, problemContext) + siteSection;
+        const batchSeed = seeds[bi % Math.max(seeds.length, 1)] || niche;
+        const seedSection = `\n### RESEARCH PILLARS / SEEDS\nUse the current focus "${batchSeed}" while keeping coverage balanced across: ${[...new Set(seeds)].slice(0, 20).join(', ')}\n`;
+        const prompt = KEYWORD_RESEARCH_PROMPT(niche, batchSeed, need, [...excludeSet], alreadyFound, intentRatio, isKnowledgeMode, problemContext) + seedSection + siteSection;
         const { data, grounding } = await callGeminiWithGrounding(prompt, true, {
           functionLabel: 'keyword_research',
         });
@@ -664,12 +747,12 @@ function findSeedParent(
 ): { seed_keyword: string; seed_volume: number } | null {
   const kwNorm = normalize(keyword);
   const kwNoSpace = kwNorm.replace(/\s+/g, '');
-  const kwWords = kwNorm.split(/\s+/);
+  const kwWords = segmentWords(kwNorm, /[\u0E00-\u0E7F]/.test(kwNorm) ? 'th' : 'en');
   let bestMatch: { seed_keyword: string; seed_volume: number; score: number } | null = null;
 
   for (const [seed, vol] of seedVolumeMap.entries()) {
     const seedNorm = seed.replace(/\s+/g, ''); // strip spaces for Thai matching
-    const seedWords = seed.split(/\s+/);
+    const seedWords = segmentWords(seed, /[\u0E00-\u0E7F]/.test(seed) ? 'th' : 'en');
 
     // Check if all seed words appear in the keyword (space-insensitive for Thai)
     const allWordsMatch = seedWords.every(w => kwWords.includes(w));
@@ -696,12 +779,8 @@ function mergeKeywords(
     const intent = gk.intent || classifyIntent(gk.keyword);
     const keyword_type = gk.keyword_type || classifyKeywordType(gk.keyword);
 
-    // If Planner matched but returned 0, fall back to Gemini estimate so we don't show misleading zeroes
     const plannerVolume = planner?.volume ?? null;
     const geminiEstimate = gk.volume_estimate ?? 0;
-    const volume = (plannerVolume !== null && plannerVolume > 0) ? plannerVolume : geminiEstimate;
-    const competition = planner?.competition ?? gk.competition ?? 'UNSPECIFIED';
-    const competition_index = planner?.competition_index ?? 0;
     // plannerDirectPool keywords carry _volume_source preset — honour it over plannerMap lookup
     const volume_source: PipelineKeyword['volume_source'] =
       gk._volume_source ? gk._volume_source :
@@ -709,6 +788,11 @@ function mergeKeywords(
       (planner?.source === 'close_variant' && plannerVolume > 0) ? 'planner_variant' :
       (planner?.source === 'dataforseo' && plannerVolume > 0) ? 'dataforseo' :
       'gemini_estimated';
+    const hasDirectMetric = isDirectMetricSource(volume_source) && plannerVolume !== null && plannerVolume > 0;
+    const volume = hasDirectMetric ? plannerVolume : 0;
+    const estimatedVolume = !hasDirectMetric && geminiEstimate > 0 ? geminiEstimate : undefined;
+    const competition = hasDirectMetric ? (planner?.competition ?? 'UNSPECIFIED') : 'UNSPECIFIED';
+    const competition_index = hasDirectMetric ? (planner?.competition_index ?? 0) : 0;
 
     // Find short-tail KP parent so long-tail keywords show their volume context
     const seedParent = volume_source === 'gemini_estimated'
@@ -716,14 +800,49 @@ function mergeKeywords(
       : null;
 
     const content_type = resolveContentType(intent);
-    const { score, priority } = computeOpportunity(volume, intent, keyword_type, gk.keyword);
+    const { score, priority } = computeOpportunity(
+      volume,
+      intent,
+      keyword_type,
+      gk.keyword,
+      planner?.organic_difficulty,
+      competition_index
+    );
+
+    const cpcLow = hasDirectMetric ? (planner?.cpc_low ?? 0) : 0;
+    const cpcHigh = hasDirectMetric ? (planner?.cpc_high ?? 0) : 0;
+    const rawCpc = hasDirectMetric
+      ? (planner?.cpc ?? (cpcLow && cpcHigh ? (cpcLow + cpcHigh) / 2 : cpcHigh || cpcLow || 0))
+      : undefined;
+    const cpc = typeof rawCpc === 'number' && rawCpc > 0 ? rawCpc : undefined;
+    const cpcCurrency = hasDirectMetric ? (planner?.cpc_currency ?? 'THB') : undefined;
+    const cpcOriginalCurrency = hasDirectMetric
+      ? (planner?.cpc_original_currency ?? (volume_source === 'dataforseo' ? 'USD' : undefined))
+      : undefined;
+    const metricConfidence: PipelineKeyword['metric_confidence'] =
+      volume_source === 'keyword_planner' || volume_source === 'dataforseo' ? 'high' :
+      volume_source === 'planner_variant' ? 'medium' : 'low';
 
     return {
       keyword: gk.keyword,
       volume,
+      estimated_volume: estimatedVolume,
       volume_source,
       competition,
       competition_index,
+      organic_difficulty: planner?.organic_difficulty,
+      cpc,
+      cpc_low: cpcLow || undefined,
+      cpc_high: cpcHigh || undefined,
+      cpc_currency: cpcCurrency,
+      cpc_original_currency: cpcOriginalCurrency,
+      cpc_to_thb_rate: hasDirectMetric ? planner?.cpc_to_thb_rate : undefined,
+      cpc_rate_as_of: hasDirectMetric ? planner?.cpc_rate_as_of : undefined,
+      cpc_rate_source: hasDirectMetric ? planner?.cpc_rate_source : undefined,
+      monthly_trend: hasDirectMetric && Array.isArray(planner?.monthly_trend) ? planner.monthly_trend : undefined,
+      metric_source: volume_source,
+      metric_as_of: new Date().toISOString().slice(0, 10),
+      metric_confidence: metricConfidence,
       intent,
       keyword_type,
       content_type,
@@ -753,6 +872,44 @@ function mergeKeywords(
       _title_pending: true as const,
     };
   });
+}
+
+function attachSupportingSuggestions(
+  keywords: PipelineKeyword[],
+  language: string
+): PipelineKeyword[] {
+  const primaryKeywords = keywords.filter(keyword => isDirectMetricSource(keyword.volume_source));
+  const suggestions = keywords.filter(keyword => !isDirectMetricSource(keyword.volume_source));
+  const primaryByName = new Map(primaryKeywords.map(keyword => [normalize(keyword.keyword), keyword]));
+
+  for (const suggestion of suggestions) {
+    let parent = suggestion.seed_keyword
+      ? primaryByName.get(normalize(suggestion.seed_keyword))
+      : undefined;
+
+    if (!parent) {
+      let best: { keyword: PipelineKeyword; score: number } | undefined;
+      for (const candidate of primaryKeywords) {
+        const directSubstring = normalize(suggestion.keyword).includes(normalize(candidate.keyword)) ? 1 : 0;
+        const score = Math.max(
+          directSubstring,
+          tokenSimilarity(suggestion.keyword, candidate.keyword, language === 'th' ? 'th' : 'en')
+        );
+        if (!best || score > best.score) best = { keyword: candidate, score };
+      }
+      if (best && best.score >= 0.2) parent = best.keyword;
+    }
+
+    suggestion.topic_cluster_role = 'supporting_keyword';
+    if (!parent) continue;
+    suggestion.primary_keyword = parent.keyword;
+    parent.secondary_keywords = [...new Set([...(parent.secondary_keywords ?? []), suggestion.keyword])];
+    suggestion.notes = suggestion.notes
+      ? `${suggestion.notes} | Supporting keyword for ${parent.keyword}`
+      : `Supporting keyword for ${parent.keyword}`;
+  }
+
+  return primaryKeywords;
 }
 
 // ─── Step 4: AI Title Generation (batched) ────────────────────────────────────
@@ -829,6 +986,21 @@ async function generateAiTitles(
       prompt = buildSeoTitleAiPrompt(requests, targetLanguage);
     }
 
+    // Few-shot (zero extra cost): reuse the top-5 competitor titles already
+    // fetched in Step 3c so the model differentiates against what actually ranks.
+    // Skip forum/social results so they're never held up as good examples.
+    const BANNED_SERP_DOMAIN = /(pantip|sanook|wongnai|reddit|quora|twitter|facebook|youtube|tiktok|blockdit|medium)/i;
+    const fewShotEntries = batch
+      .filter(kw => kw.competitors && kw.competitors.length > 0)
+      .map(kw => ({
+        keyword: cleanKeywordForTitle(kw.keyword),
+        competitorTitles: kw.competitors!
+          .filter(c => !BANNED_SERP_DOMAIN.test(c.domain))
+          .map(c => c.title),
+      }));
+    const fewShot = buildSerpFewShotBlock(fewShotEntries);
+    if (fewShot) prompt = `${fewShot}\n\n${prompt}`;
+
     const BACKOFFS = [1000, 2000];
     let lastErr: any = null;
     let succeeded = false;
@@ -894,9 +1066,17 @@ function applyTitles(
     const isThai = /[฀-๿]/.test(kw.keyword);
     const hasKeyword = isThai
       ? titleLower.includes(kwLower)
-      : kw.keyword.split(/\s+/).some(w => w.length > 1 && titleLower.includes(w.toLowerCase()));
+      : segmentWords(kw.keyword, /[\u0E00-\u0E7F]/.test(kw.keyword) ? 'th' : 'en')
+          .some(w => w.length > 1 && titleLower.includes(w.toLowerCase()));
 
     if (ai && title && !isForbidden && hasKeyword) {
+      // Independent, deterministic quality check (the AI's own seo/aeo/ctr scores
+      // are self-reported). Additive: recorded in title_notes, no effect on which
+      // titles are accepted vs. fall back.
+      const quality = scoreTitle(title, kw.keyword, kw.intent);
+      const qualityNote = quality.issues.length
+        ? `คุณภาพ ${quality.score}/100: ${quality.issues.join('; ')}`
+        : `คุณภาพ ${quality.score}/100`;
       return {
         ...kw,
         title,
@@ -905,7 +1085,8 @@ function applyTitles(
         aeo_score: ai.aeo_score || 0,
         ai_search_score: ai.ai_search_score || 0,
         ctr_score: ai.ctr_score || 0,
-        title_notes: ai.notes || '',
+        title_quality_score: quality.score,
+        title_notes: ai.notes ? `${ai.notes} | ${qualityNote}` : qualityNote,
       };
     } else {
       // Fallback: simple rule-based title
@@ -922,11 +1103,13 @@ function applyTitles(
 
 function makePartialResult(
   keywords: PipelineKeyword[],
-  plannerCount: number,
-  geminiCount: number,
+  requestedCount: number,
+  candidateCount: number,
+  metricMode: KeywordMetricMode,
   warnings: string[]
 ): PipelineResult {
   const geminiCost = getSessionUsage();
+  const sources = summarizeMetricSources(keywords);
   const cost = {
     ...geminiCost,
     gemini_cost_usd: geminiCost.cost_usd,
@@ -934,7 +1117,7 @@ function makePartialResult(
     dfs_keywords_called: 0,
     dfs_cost_usd: 0,
     dfs_cost_thb: 0,
-    kp_keywords_fetched: plannerCount,
+    kp_keywords_fetched: sources.planner,
     kp_cost_usd: 0,
     kp_cost_thb: 0,
     total_cost_usd: geminiCost.cost_usd,
@@ -945,9 +1128,17 @@ function makePartialResult(
     clusters: { clusters: [], ungrouped: [] },
     meta: {
       total: keywords.length,
-      planner_count: plannerCount,
-      dataforseo_count: 0,
-      gemini_count: geminiCount,
+      requested_count: requestedCount,
+      candidate_count: candidateCount,
+      metric_mode: metricMode,
+      api_backed_count: sources.apiBacked,
+      derived_count: sources.derived,
+      estimated_count: sources.estimated,
+      shortfall_count: Math.max(requestedCount - keywords.length, 0),
+      cpc_currency: 'THB',
+      planner_count: sources.planner,
+      dataforseo_count: sources.dataForSeo,
+      gemini_count: sources.estimated,
       title_ai_count: 0,
       fallback_title_count: 0,
       cluster_count: 0,
@@ -964,11 +1155,17 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
   const sig = input.signal;
   const warnings: string[] = [];
   const lang = input.targetLanguage || 'th';
+  const metricMode: KeywordMetricMode = input.metricMode === 'api_first' ? 'api_first' : 'api_only';
+  const candidateTarget = getCandidateTarget(input.targetCount);
   // Strategy is fixed — not user-selectable.
   // Ranking order: problem keywords with volume → volume keywords → problem keywords without volume.
   const strategyMode: StrategyMode = 'hybrid';
   const aiSearchOpt = input.ai_search_optimization !== false;
   const excludeSet = new Set<string>((input.excludeKeywords || []).map(normalize));
+  // Domain's existing ranked keywords (DFS ranked_keywords), keyed by normalized
+  // keyword → current position; populated in Step 0.7, applied after the Step 3 merge.
+  const RANKED_SEED_INJECT_CAP = 80;
+  const rankedKeywordMap = new Map<string, { rankGroup: number | null; rankAbsolute: number | null; url: string | null }>();
   // Capture user-supplied seeds before Step 0 expands them — used as short-tail KP anchors
   const userSuppliedSeeds = input.seeds.map(normalize);
   input.seeds.forEach(s => excludeSet.add(normalize(s)));
@@ -1045,6 +1242,50 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
     log(`[0/4] Problem discovery: ${discoveredProblems.length} problems → ${newSeeds.length} new seeds added`);
   }
 
+  // ── Step 0.7: Domain ranked-keyword base seeds (DFS ranked_keywords) ─────────
+  // If a site URL + DFS creds are available, pull the keywords the domain already
+  // ranks for and (a) inject the strongest as extra seeds so Step 1 KP fetches their
+  // exact volume, and (b) remember each one's current position so the final keywords
+  // can be tagged with the domain's existing rank. Fully guarded: with no site_url or
+  // no DFS creds this block is a no-op and the pipeline behaves exactly as before.
+  if (input.site_url) {
+    try {
+      const { hasDataForSeoCreds, getRankedKeywordsForDomain } = await import('../services/dataForSeoService');
+      if (hasDataForSeoCreds()) {
+        log('[0.7/4] Fetching keywords the domain already ranks for (DFS ranked_keywords)...');
+        const ranked = await getRankedKeywordsForDomain(input.site_url, { limit: 200 });
+        if (ranked.keywords.length > 0) {
+          for (const rk of ranked.keywords) {
+            const key = normalize(rk.keyword);
+            if (key && !rankedKeywordMap.has(key)) {
+              rankedKeywordMap.set(key, { rankGroup: rk.rankGroup, rankAbsolute: rk.rankAbsolute, url: rk.url });
+            }
+          }
+          // Inject strongest-ranked keywords as new seeds (they arrive ordered by best
+          // rank first), deduped against excluded + already-present seeds.
+          const seenSeeds = new Set<string>(input.seeds.map(normalize));
+          const rankedSeeds = ranked.keywords
+            .slice(0, RANKED_SEED_INJECT_CAP)
+            .map(rk => rk.keyword)
+            .filter(kw => {
+              const n = normalize(kw);
+              if (!n || excludeSet.has(n) || seenSeeds.has(n)) return false;
+              seenSeeds.add(n);
+              return true;
+            });
+          if (rankedSeeds.length > 0) {
+            input = { ...input, seeds: [...input.seeds, ...rankedSeeds] };
+          }
+          log(`[0.7/4] Domain ranks for ${ranked.keywords.length} keywords → ${rankedSeeds.length} new base seeds injected (existing ranks captured for ${rankedKeywordMap.size})`);
+        } else {
+          log(`[0.7/4] No ranked keywords returned (${ranked.note})`);
+        }
+      }
+    } catch (err: any) {
+      log(`[0.7/4] Ranked-keyword base seeding skipped: ${err.message}`);
+    }
+  }
+
   // ── Step 1: Keyword Planner ──────────────────────────────────────────────────
   // plannerDirectPool: KP keywords staged for direct injection into geminiKeywords
   // after Gemini expansion. Populated in Step 1, merged in Step 2c.
@@ -1068,9 +1309,9 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
     const expandedSeeds = input.seeds.map(normalize).filter(s => !userSuppliedSeeds.includes(s));
     const allPlannerSeeds = [...new Set([...userSuppliedSeeds, ...expandedSeeds])].filter(s => !FORUM_SEED_BLOCK.test(s));
     log(`[1/4] Planner seeds: ${allPlannerSeeds.slice(0,5).join(', ')}... (${allPlannerSeeds.length} total, user seeds first)`);
-    plannerMap = await fetchPlannerVolumes(allPlannerSeeds, input);
+    plannerMap = await fetchPlannerVolumes(allPlannerSeeds, input, warnings);
     log(`[1/4] Keyword Planner: ${plannerMap.size} keywords with real volume`);
-    if (plannerMap.size === 0) warnings.push('Google Keyword Planner returned 0 results — using WordGod estimates only');
+    if (plannerMap.size === 0) warnings.push('Google Keyword Planner returned 0 results — DataForSEO will be tried next and missing provider metrics will remain blank');
 
     // Build seedVolumeMap — short-tail KP anchors for annotating long-tail estimates
     // Planner sometimes inserts spaces into Thai keywords (e.g. "ประกัน เดินทาง")
@@ -1079,7 +1320,7 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
 
     // 1. User-supplied seeds: look up in plannerMap with space-insensitive matching
     for (const userSeed of userSuppliedSeeds) {
-      const wordCount = userSeed.split(/\s+/).length;
+      const wordCount = countWords(userSeed, /[\u0E00-\u0E7F]/.test(userSeed) ? 'th' : 'en');
       if (wordCount > 3) continue;
       // Try exact, then space-stripped match
       const data = plannerMap.get(userSeed)
@@ -1090,7 +1331,7 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
     }
     // 2. Any short-tail ideas Planner returned with real volume
     for (const [kw, data] of plannerMap.entries()) {
-      const wordCount = kw.trim().split(/\s+/).length;
+      const wordCount = countWords(kw, /[\u0E00-\u0E7F]/.test(kw) ? 'th' : 'en');
       if (wordCount <= 3 && data.volume > 0 && !seedVolumeMap.has(kw) && !seedVolumeMap.has(stripSpaces(kw))) {
         seedVolumeMap.set(kw, data.volume);
       }
@@ -1140,8 +1381,8 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
     if (kpSeedTexts.length > 0) input = { ...input, seeds: [...input.seeds, ...kpSeedTexts] };
     if (kpDirectCount > 0) log(`[1/4] Queued ${kpDirectCount} KP keywords for direct pool injection (will merge with real volume)`);
   } else {
-    log('[1/4] Keyword Planner: credentials not configured — using WordGod AI estimates');
-    warnings.push('GOOGLE_ADS_* credentials not set — volumes are WordGod AI estimates, not real data');
+    log('[1/4] Keyword Planner: credentials not configured — direct KP metrics unavailable');
+    warnings.push('GOOGLE_ADS_* credentials not set — unmatched Volume/CPC will remain blank');
   }
 
   // ── Step 2: WordGod keyword expansion ───────────────────────────────────────
@@ -1157,7 +1398,7 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
     input.presetKey === 'preset4' ? 'ecommerce' :
     input.presetKey === 'preset3' ? 'service' :
     input.website_type ?? undefined;
-  log(`[2/4] Expanding keywords with WordGod AI... [${modeLabel}] Info ${intentRatio.informational}% / Com ${intentRatio.commercial}% / Trans ${intentRatio.transactional}% / Nav ${intentRatio.navigational}% / Update ${intentRatio.update}%`);
+  log(`[2/4] Expanding ${candidateTarget} candidates for ${input.targetCount} final keywords... [${modeLabel}] Info ${intentRatio.informational}% / Com ${intentRatio.commercial}% / Trans ${intentRatio.transactional}% / Nav ${intentRatio.navigational}% / Update ${intentRatio.update}%`);
 
   // Build cache key from stable inputs (skip cache on forceRefresh)
   const geminiCacheKey = input.forceRefresh
@@ -1165,7 +1406,7 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
     : buildGeminiCacheKey(
         input.niche,
         userSuppliedSeeds.slice(0, 20),
-        input.targetCount,
+        candidateTarget,
         intentRatio,
         isKnowledgeMode
       );
@@ -1173,7 +1414,7 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
   const geminiExpandResult = await expandWithGemini(
     input.seeds,
     input.niche,
-    input.targetCount,
+    candidateTarget,
     excludeSet,
     log,
     intentRatio,
@@ -1233,6 +1474,8 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
   // Cache-first: skip API call for keywords cached within TTL.
   // Cost: ~$0.0003/keyword — typically $0.01–0.02/run.
   let dfsCalled = 0;
+  let dfsKdCalled = 0;
+  let dfsKdCostUsd = 0;
   const { hasDataForSeoCreds, getDataForSeoVolumes } = await import('../services/dataForSeoService');
   const { readDFSCache, writeDFSCache } = await import('../cache/dfsCache');
 
@@ -1266,11 +1509,20 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
   }
 
   if (hasDataForSeoCreds() && geminiKeywords.length > 0) {
-    // Only enrich keywords that have no real KP volume yet
+    // Only send concise primary-keyword candidates to the metric provider.
+    // Long-tail ideas remain supporting suggestions and never borrow a shorter
+    // keyword's volume.
     const needsVolume = geminiKeywords.filter(k => {
       const p = plannerMap.get(normalize(k.keyword));
-      return !p || p.volume === 0;
+      return (!p || p.volume === 0) && isMetricLookupCandidate(k.keyword, lang);
     });
+    const skippedLongTail = geminiKeywords.filter(k => {
+      const p = plannerMap.get(normalize(k.keyword));
+      return (!p || p.volume === 0) && !isMetricLookupCandidate(k.keyword, lang);
+    }).length;
+    if (skippedLongTail > 0) {
+      log(`[2.5/4] DataForSEO: skipped ${skippedLongTail} long-tail suggestions; no proxy volume will be assigned`);
+    }
 
     if (needsVolume.length > 0) {
       // Cache check — skip API for fresh cache hits
@@ -1287,13 +1539,10 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
       }
 
       const cacheHits = needsVolume.length - toCall.length;
-      // Prioritise shorter keywords — DFS only has data for ≤4 word queries typically.
-      // Long-tail (5+ words) almost never appear in DFS; put them last to save quota.
-      toCall.sort((a, b) => a.split(/\s+/).length - b.split(/\s+/).length);
-      const shortTailCount = toCall.filter(k => k.split(/\s+/).length <= 4).length;
+      toCall.sort((a, b) => countWords(a, lang) - countWords(b, lang));
       dfsCalled += toCall.length;
       const dfsEstUsd = toCall.length * 0.0003;
-      log(`[2.5/4] DataForSEO: ${needsVolume.length} keywords need volume → ${cacheHits} cache hits, ${toCall.length} to call (${shortTailCount} short-tail, ${toCall.length - shortTailCount} long-tail) | est. $${dfsEstUsd.toFixed(4)} (฿${(dfsEstUsd * 34).toFixed(2)})`);
+      log(`[2.5/4] DataForSEO: ${needsVolume.length} concise candidates → ${cacheHits} cache hits, ${toCall.length} exact lookups | est. $${dfsEstUsd.toFixed(4)} (฿${(dfsEstUsd * 34).toFixed(2)})`);
 
       if (toCall.length > 0) {
         try {
@@ -1315,11 +1564,15 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
             }
           }
 
-          const rawMap = await getDataForSeoVolumes(dfsKeywords, isThai ? 'th' : 'en', locationCode);
+          const rawMap = await getDataForSeoVolumes(
+            dfsKeywords,
+            isThai ? 'th' : 'en',
+            locationCode,
+            warning => {
+              if (!warnings.includes(warning)) warnings.push(warning);
+            }
+          );
           let dfsHits = 0;
-
-          // Track which original keywords still have no volume — need fallback
-          const stillMissing: string[] = [];
 
           for (const kw of toCall) {
             const dfsKey = isThai
@@ -1332,106 +1585,34 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
               writeDFSCache(kw, metric, kwMeta?.keyword_type ?? 'default', kwMeta?.intent ?? 'informational');
               dfsHits++;
             } else {
-              // Only cache zero-volume for short keywords (≤3 words) — long-tail may match via shortening
-              if (kw.trim().split(/\s+/).length <= 3) {
-                const dummy = { volume: 0, competition: 'UNSPECIFIED' as const, competition_index: 0, cpc: 0, source: 'dataforseo' as const };
-                writeDFSCache(kw, dummy, kwMeta?.keyword_type ?? 'default', kwMeta?.intent ?? 'informational');
-              } else {
-                stillMissing.push(kw);
-              }
+              const dummy = {
+                volume: 0,
+                competition: 'UNSPECIFIED' as const,
+                competition_index: 0,
+                cpc: 0,
+                cpc_currency: 'THB' as const,
+                cpc_original_currency: 'USD' as const,
+                cpc_conversion_available: true,
+                source: 'dataforseo' as const,
+              };
+              writeDFSCache(kw, dummy, kwMeta?.keyword_type ?? 'default', kwMeta?.intent ?? 'informational');
             }
           }
-
-          // ── Fallback: progressive shortening for long-tail with no volume ────────
-          // Drop words from the right until DFS has data, use that volume as proxy.
-          // e.g. "เอเจนซี่รับทำวีซ่า ราคาถูก ดีไหม" → try "เอเจนซี่รับทำวีซ่า ราคาถูก" → "เอเจนซี่รับทำวีซ่า"
-          if (stillMissing.length > 0) {
-            // Build shortened candidate → original keyword map (dedup candidates)
-            const shortenMap = new Map<string, string>(); // shortened → original kw
-            for (const kw of stillMissing) {
-              const words = kw.trim().split(/\s+/);
-              // Try removing 1 word at a time from right, minimum 2 words
-              for (let len = words.length - 1; len >= 2; len--) {
-                const shortened = words.slice(0, len).join(' ');
-                const shortenKey = isThai
-                  ? shortened.toLowerCase().replace(/\s+/g, '')
-                  : shortened.toLowerCase();
-                // Already have volume from round 1?
-                if (rawMap.has(shortenKey)) {
-                  const m = rawMap.get(shortenKey)!;
-                  if (m.volume > 0) {
-                    shortenMap.set(kw, shortened); // found in round-1 result
-                  }
-                  break;
-                }
-                // Need to look up — use shortest candidate per original kw (first success wins)
-                if (!shortenMap.has(kw)) shortenMap.set(kw, shortened);
-                break; // only try 1-word-shorter first; if no hit, try next iteration
-              }
-            }
-
-            // Collect unique shortened keywords that need lookup
-            const shortenLookup = [...new Set(shortenMap.values())].filter(s => {
-              const k = isThai ? s.toLowerCase().replace(/\s+/g, '') : s.toLowerCase();
-              return !rawMap.has(k); // skip if already in rawMap from round 1
-            });
-
-            if (shortenLookup.length > 0) {
-              log(`[2.5/4] DataForSEO fallback: ${stillMissing.length} long-tail with no volume → trying ${shortenLookup.length} shortened forms`);
-              const shortenDfsKeys = shortenLookup.map(s =>
-                isThai ? s.toLowerCase().replace(/\s+/g, '') : s.toLowerCase()
-              );
-              const shortenRaw = await getDataForSeoVolumes(shortenDfsKeys, isThai ? 'th' : 'en', locationCode);
-              // Merge into rawMap
-              for (const [k, v] of shortenRaw) rawMap.set(k, v);
-            }
-
-            // Now assign volume from shortened form to original keywords
-            let fallbackHits = 0;
-            for (const kw of stillMissing) {
-              const kwMeta = needsVolume.find(k => k.keyword === kw);
-              const shortened = shortenMap.get(kw);
-              if (!shortened) {
-                const dummy = { volume: 0, competition: 'UNSPECIFIED' as const, competition_index: 0, cpc: 0, source: 'dataforseo' as const };
-                writeDFSCache(kw, dummy, kwMeta?.keyword_type ?? 'default', kwMeta?.intent ?? 'informational');
-                continue;
-              }
-              const shortenKey = isThai
-                ? shortened.toLowerCase().replace(/\s+/g, '')
-                : shortened.toLowerCase();
-              const metric = rawMap.get(shortenKey);
-              if (metric && metric.volume > 0) {
-                // Tag as planner_variant so UI shows it differently from exact DFS
-                const proxyMetric = { ...metric, source: 'dataforseo' as const };
-                plannerMap.set(normalize(kw), { ...proxyMetric, source: 'close_variant' as const, volume_proxy_keyword: shortened });
-                writeDFSCache(kw, proxyMetric, kwMeta?.keyword_type ?? 'default', kwMeta?.intent ?? 'informational');
-                fallbackHits++;
-              } else {
-                const dummy = { volume: 0, competition: 'UNSPECIFIED' as const, competition_index: 0, cpc: 0, source: 'dataforseo' as const };
-                writeDFSCache(kw, dummy, kwMeta?.keyword_type ?? 'default', kwMeta?.intent ?? 'informational');
-              }
-            }
-            dfsHits += fallbackHits;
-            log(`[2.5/4] DataForSEO fallback: ${fallbackHits}/${stillMissing.length} enriched via shortened form`);
-          }
-
-          log(`[2.5/4] DataForSEO: ${dfsHits}/${toCall.length} total enriched`);
+          log(`[2.5/4] DataForSEO: ${dfsHits}/${toCall.length} exact keywords enriched`);
         } catch (err: any) {
-          log(`[2.5/4] DataForSEO error: ${err.message} — using Gemini estimates`);
+          log(`[2.5/4] DataForSEO error: ${err.message} — provider metrics will remain blank`);
         }
       }
     }
   }
 
-  // ── Step 2.55: KP historical metrics for keywords still missing volume ────────
-  // After DFS, some Gemini keywords still have no real volume. Send them to KP
-  // getHistoricalMetrics which uses close-variant fallback (higher hit rate than DFS).
+  // ── Step 2.55: KP exact metrics for concise keywords still missing volume ───
   if (hasPlannerCreds && input.useKeywordPlanner !== false) {
     const stillNoVolume = geminiKeywords.filter(k => {
       const p = plannerMap.get(normalize(k.keyword));
-      return !p || p.volume === 0;
+      return (!p || p.volume === 0) && isMetricLookupCandidate(k.keyword, lang);
     });
-    // Cap at 600 — KP historical is slow; beyond this gemini estimates are good enough
+    // Cap at 600 to stay within the existing API throughput boundary.
     const kpHistoricalBatch = stillNoVolume.slice(0, 600);
     if (kpHistoricalBatch.length > 0) {
       log(`[2.55/4] KP historical: ${kpHistoricalBatch.length}/${stillNoVolume.length} keywords → querying Keyword Planner (parallel)`);
@@ -1445,7 +1626,10 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
             kpConfig,
             accessToken,
             input.targetLanguage || 'th',
-            'Thailand'
+            'Thailand',
+            warning => {
+              if (!warnings.includes(warning)) warnings.push(warning);
+            }
           );
           let kpHits = 0;
           for (const [kw, metric] of kpMetrics.entries()) {
@@ -1454,8 +1638,15 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
                 volume: metric.volume,
                 competition: metric.competition,
                 competition_index: metric.competition_index,
-                source: metric.source, // 'exact' or 'close_variant'
-                volume_proxy_keyword: metric.variant_keyword,
+                cpc: metric.cpc,
+                cpc_low: metric.cpc_low,
+                cpc_high: metric.cpc_high,
+                cpc_currency: metric.cpc_currency,
+                cpc_original_currency: metric.cpc_original_currency,
+                cpc_to_thb_rate: metric.cpc_to_thb_rate,
+                cpc_rate_as_of: metric.cpc_rate_as_of,
+                cpc_rate_source: metric.cpc_rate_source,
+                source: metric.source,
               });
               kpHits++;
             }
@@ -1504,11 +1695,27 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
   // ── Step 3: Merge ────────────────────────────────────────────────────────────
   log('[3/4] Merging Keyword Planner + WordGod data...');
   const merged = mergeKeywords(geminiKeywords, plannerMap, seedVolumeMap);
-
-  const plannerCount = merged.filter(k => k.volume_source === 'keyword_planner' || k.volume_source === 'planner_variant').length;
-  const dfsCount = merged.filter(k => k.volume_source === 'dataforseo').length;
-  const geminiCount = merged.filter(k => k.volume_source === 'gemini_estimated').length;
-  log(`[3/4] Merged: ${merged.length} keywords (${plannerCount} KP, ${dfsCount} DFS, ${geminiCount} est.) — applying intent-bucket allocation next`);
+  // Tag keywords the domain already ranks for (from Step 0.7) with their current position.
+  if (rankedKeywordMap.size > 0) {
+    let taggedRank = 0;
+    for (const kw of merged) {
+      const rankInfo = rankedKeywordMap.get(normalize(kw.keyword));
+      if (rankInfo) {
+        kw.existing_rank = rankInfo.rankGroup ?? rankInfo.rankAbsolute ?? undefined;
+        kw.existing_rank_url = rankInfo.url ?? undefined;
+        kw.existing_rank_source = 'dfs_ranked_keywords';
+        kw.is_base_seed = true;
+        taggedRank++;
+      }
+    }
+    if (taggedRank > 0) log(`[3/4] Tagged ${taggedRank} keywords with the domain's existing rank`);
+  }
+  const candidateCount = merged.length;
+  const candidateSources = summarizeMetricSources(merged);
+  const plannerCount = candidateSources.planner;
+  const dfsCount = candidateSources.dataForSeo;
+  const geminiCount = candidateSources.estimated;
+  log(`[3/4] Merged: ${merged.length} candidates (${plannerCount} KP exact, ${dfsCount} DFS exact, ${candidateSources.derived} derived, ${geminiCount} suggestions)`);
 
   // ── Step 3b: Enrich all keywords + Intent-Bucket Allocation ─────────────────
   //
@@ -1587,41 +1794,169 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
     };
     kw.priority_score = computePriorityScore(scores, strategyMode);
     // Boost keywords with verified real volume — they're more reliable than estimates
-    if (kw.volume_source === 'keyword_planner' || kw.volume_source === 'planner_variant' || kw.volume_source === 'dataforseo') {
+    if (isDirectMetricSource(kw.volume_source)) {
       kw.intent_bucket_score = (kw.intent_bucket_score ?? 0) + 15;
       kw.priority_score = (kw.priority_score ?? 0) + 15;
     }
   }
 
-  // Guarantee KP/DFS keywords appear in final output — pre-select them first,
-  // then fill remaining slots via intent-bucket allocation from the rest.
-  const realVolumeKws = (merged as any[]).filter((kw: any) =>
-    kw.volume_source === 'keyword_planner' || kw.volume_source === 'planner_variant' || kw.volume_source === 'dataforseo'
+  // Select exact API-backed keywords first. The previous implementation capped
+  // them at 60%, which forced estimates into otherwise healthy result sets.
+  const directMetricKeywords = merged
+    .filter(keyword => isDirectMetricSource(keyword.volume_source) && keyword.volume > 0)
+    .sort((a, b) => b.volume - a.volume);
+  const supportingSuggestions = merged.filter(keyword => !isDirectMetricSource(keyword.volume_source));
+  const selectedDirect = applyIntentBucketAllocation(
+    directMetricKeywords,
+    intentRatio,
+    input.presetKey ?? 'preset1',
+    input.targetCount
   );
-  // Sort real-volume keywords by volume desc so highest-volume ones are selected first
-  realVolumeKws.sort((a: any, b: any) => (b.volume ?? 0) - (a.volume ?? 0));
 
-  // Cap pre-selected real-volume keywords to at most 60% of targetCount
-  const maxRealGuaranteed = Math.floor(input.targetCount * 0.6);
-  const guaranteedKws = realVolumeKws.slice(0, maxRealGuaranteed);
-  const guaranteedSet = new Set(guaranteedKws.map((k: any) => k.keyword));
-  const remainingForAllocation = (merged as any[]).filter((kw: any) => !guaranteedSet.has(kw.keyword));
-  const remainingTarget = input.targetCount - guaranteedKws.length;
+  let allocated: PipelineKeyword[] = selectedDirect;
+  const remainingTarget = input.targetCount - selectedDirect.length;
+  if (metricMode === 'api_first' && remainingTarget > 0) {
+    const selectedSuggestions = applyIntentBucketAllocation(
+      supportingSuggestions,
+      intentRatio,
+      input.presetKey ?? 'preset1',
+      remainingTarget
+    );
+    allocated = [...selectedDirect, ...selectedSuggestions];
+    if (selectedSuggestions.length > 0) {
+      warnings.push(`${selectedSuggestions.length} supporting keyword suggestions have no direct API Volume/CPC; provider columns are intentionally blank`);
+    }
+  }
 
-  const allocated = remainingTarget > 0
-    ? [...guaranteedKws, ...applyIntentBucketAllocation(remainingForAllocation as any, intentRatio, input.presetKey ?? 'preset1', remainingTarget)]
-    : guaranteedKws;
-  // Replace merged with allocated result
+  if (selectedDirect.length < input.targetCount) {
+    const shortage = input.targetCount - selectedDirect.length;
+    warnings.push(`พบ Keyword ที่มี Volume API จริง ${selectedDirect.length}/${input.targetCount} คำ (ขาด ${shortage} คำ)`);
+    if (metricMode === 'api_only') {
+      warnings.push('โหมดเฉพาะข้อมูลจริงจะไม่เติม Keyword หรือ Volume ประมาณเพื่อให้ครบจำนวน');
+    }
+  }
+
   merged.length = 0;
-  merged.push(...(allocated as any));
+  merged.push(...(allocated as Array<PipelineKeyword & { _title_pending: true }>));
+  log(`[3b/4] Metric selection: ${selectedDirect.length} API-backed + ${merged.length - selectedDirect.length} supporting suggestions (${metricMode})`);
 
-  log(`[3b/4] Intent-bucket allocation done: ${merged.length} keywords selected (strategy: ${strategyMode})`);
+  // Organic KD is checked only for the selected output, not the entire raw
+  // candidate pool, to keep DataForSEO cost proportional to the requested size.
+  if (input.mode === 'full_plan' && hasDataForSeoCreds() && merged.length > 0) {
+    log(`[3b/4] Organic KD: checking ${merged.length} selected keywords with DataForSEO Labs...`);
+    try {
+      const { getDataForSeoKeywordDifficulty } = await import('../services/dataForSeoService');
+      const kdResult = await getDataForSeoKeywordDifficulty(
+        merged.map(keyword => keyword.keyword),
+        lang === 'th' ? 'th' : 'en',
+        lang === 'th' ? 2764 : 2840
+      );
+      dfsKdCalled = kdResult.calledKeywords;
+      dfsKdCostUsd = kdResult.costUsd;
+      let kdHits = 0;
+      for (const kw of merged) {
+        const exact = kdResult.metrics.get(kw.keyword.toLowerCase().trim());
+        const noSpace = kdResult.metrics.get(kw.keyword.toLowerCase().replace(/\s+/g, ''));
+        const difficulty = exact ?? noSpace;
+        if (typeof difficulty !== 'number') continue;
+        kw.organic_difficulty = difficulty;
+        const opportunity = computeOpportunity(
+          kw.volume,
+          kw.intent,
+          kw.keyword_type,
+          kw.keyword,
+          difficulty,
+          kw.competition_index
+        );
+        kw.opportunity_score = opportunity.score;
+        kw.priority = opportunity.priority;
+        kw.priority_score = Math.round((kw.priority_score ?? opportunity.score) * 0.8 + opportunity.score * 0.2);
+        kdHits++;
+      }
+      log(`[3b/4] Organic KD: ${kdHits}/${merged.length} matched (cost $${dfsKdCostUsd.toFixed(4)})`);
+    } catch (err: any) {
+      warnings.push(`Organic KD unavailable: ${err.message}`);
+      log(`[3b/4] Organic KD skipped: ${err.message}`);
+    }
+  }
+
+  // ── Step 3c: SERP rank + top-5 competitors + multi-layer validation ──────────
+  // Runs only for a site + full_plan + DFS creds, and only on the strongest selected
+  // keywords (capped) so SERP cost stays proportional. L1 (DFS SERP) is the source of
+  // truth; L2 (existing_rank from Step 0.7) cross-checks; a low-confidence result
+  // triggers at most ONE re-fetch. Fully guarded → no site_url/creds = no-op.
+  if (input.site_url && input.mode === 'full_plan' && hasDataForSeoCreds() && merged.length > 0) {
+    try {
+      const { getSerpTop } = await import('../services/dataForSeoService');
+      const { buildRankAnalysis } = await import('./rankValidation');
+      const SERP_RANK_MAX = 60;
+      const serpOpts = {
+        languageCode: lang === 'th' ? 'th' : 'en',
+        locationCode: lang === 'th' ? 2764 : 2840,
+      };
+      // Prefer keywords the domain already ranks for, then highest priority.
+      const rankTargets = [...merged]
+        .sort((a, b) => {
+          const aBase = a.is_base_seed ? 1 : 0;
+          const bBase = b.is_base_seed ? 1 : 0;
+          if (aBase !== bBase) return bBase - aBase;
+          return (b.priority_score ?? 0) - (a.priority_score ?? 0);
+        })
+        .slice(0, SERP_RANK_MAX);
+      log(`[3c/4] SERP rank check: ${rankTargets.length}/${merged.length} keywords (cap ${SERP_RANK_MAX})...`);
+      let serpCalls = 0;
+      let refetches = 0;
+      let top5Hits = 0;
+      let lowConf = 0;
+      for (const kw of rankTargets) {
+        if (checkAbort()) break;
+        const targetDomain = input.site_url;
+        let serp = await getSerpTop(kw.keyword, serpOpts);
+        serpCalls++;
+        let analysis = buildRankAnalysis({
+          keyword: kw.keyword,
+          serpResults: serp.results,
+          targetDomain,
+          rankedKeywordRank: kw.existing_rank ?? null,
+          // L3 grounding intentionally omitted: Gemini grounding returns Vertex redirect
+          // URLs, not resolvable publisher domains, so it cannot corroborate a domain.
+        });
+        // Bounded reconciliation: at most one re-fetch when confidence is low.
+        if (analysis.needsRefetch) {
+          serp = await getSerpTop(kw.keyword, serpOpts);
+          serpCalls++;
+          refetches++;
+          analysis = buildRankAnalysis({
+            keyword: kw.keyword,
+            serpResults: serp.results,
+            targetDomain,
+            rankedKeywordRank: kw.existing_rank ?? null,
+          });
+        }
+        kw.site_rank = analysis.siteRank;
+        kw.rank_in_top5 = analysis.inTop5;
+        kw.rank_confidence = analysis.rankConfidence;
+        kw.rank_source = 'dfs_serp';
+        kw.rank_checked_at = analysis.checkedAt;
+        kw.competitors = analysis.top5Competitors;
+        if (analysis.inTop5) top5Hits++;
+        if (analysis.rankConfidence === 'low') lowConf++;
+      }
+      log(`[3c/4] SERP rank: ${serpCalls} calls (${refetches} re-fetch), ${top5Hits} in top-5, ${lowConf} low-confidence`);
+      if (lowConf > 0) {
+        warnings.push(`${lowConf} keyword มีความมั่นใจอันดับต่ำ (L1/L2 ขัดกัน) — ตรวจซ้ำแล้วยึด SERP จริงเป็นค่าหลัก`);
+      }
+    } catch (err: any) {
+      warnings.push(`SERP rank check unavailable: ${err.message}`);
+      log(`[3c/4] SERP rank check skipped: ${err.message}`);
+    }
+  }
 
   // ── Abort after step 3 ───────────────────────────────────────────────────────
   if (checkAbort()) {
     log(`Stopped — returning ${merged.length} keywords without titles`);
     const partial = merged.map(k => ({ ...k, title: k.keyword, aeo_question: '', seo_score: 0, aeo_score: 0, ai_search_score: 0, ctr_score: 0, title_notes: '' })) as PipelineKeyword[];
-    return makePartialResult(partial, plannerCount, geminiCount, warnings);
+    return makePartialResult(partial, input.targetCount, candidateCount, metricMode, warnings);
   }
 
   // ── Step 4+6: Title generation + Clustering + Article grouping in parallel ──
@@ -1633,7 +1968,15 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
     clusterKeywords(merged as any, input.niche, log),
     runArticleGrouping
       ? runArticleGroupingDecisionEngine(
-          merged.map(k => ({ keyword: k.keyword, intent: k.intent, volume: k.volume, journey_stage: k.journey_stage })),
+          merged.map(k => ({
+            keyword: k.keyword,
+            intent: k.intent,
+            volume: k.volume,
+            journey_stage: k.journey_stage,
+            keyword_group: k.keyword_group,
+            parent_topic: k.parent_topic,
+            topic_cluster_role: k.topic_cluster_role,
+          })),
           input.niche,
           log
         )
@@ -1683,7 +2026,7 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
   // ── Abort check ───────────────────────────────────────────────────────────────
   if (checkAbort()) {
     log(`Stopped — returning ${final.length} keywords`);
-    return makePartialResult(final, plannerCount, geminiCount, warnings);
+    return makePartialResult(final, input.targetCount, candidateCount, metricMode, warnings);
   }
 
   // Attach titles to cluster keywords
@@ -1700,20 +2043,25 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
   const geminiCost = getSessionUsage();
   const DFS_PRICE_PER_KW = 0.0003;
   const USD_TO_THB = 34;
-  const dfsCostUsd = dfsCalled * DFS_PRICE_PER_KW;
+  const dfsVolumeCostUsd = dfsCalled * DFS_PRICE_PER_KW;
+  const dfsCostUsd = dfsVolumeCostUsd + dfsKdCostUsd;
   const dfsCostThb = dfsCostUsd * USD_TO_THB;
+  const dfsKdCostThb = dfsKdCostUsd * USD_TO_THB;
   const totalCostUsd = geminiCost.cost_usd + dfsCostUsd;
   const totalCostThb = geminiCost.cost_thb + dfsCostThb;
 
-  log(`Done: ${final.length} keywords | KP: ${plannerCount} (฿0) | DFS: ${dfsCount} ($${dfsCostUsd.toFixed(4)}/฿${dfsCostThb.toFixed(2)}) | Gemini: $${geminiCost.cost_usd.toFixed(4)}/฿${geminiCost.cost_thb.toFixed(2)} | Total: $${totalCostUsd.toFixed(4)}/฿${totalCostThb.toFixed(2)}`);
+  log(`Done: ${final.length} keywords | KP: ${plannerCount} (฿0) | DFS: ${dfsCount} + KD ${dfsKdCalled} ($${dfsCostUsd.toFixed(4)}/฿${dfsCostThb.toFixed(2)}) | Gemini: $${geminiCost.cost_usd.toFixed(4)}/฿${geminiCost.cost_thb.toFixed(2)} | Total: $${totalCostUsd.toFixed(4)}/฿${totalCostThb.toFixed(2)}`);
 
   const cost = {
     ...geminiCost,
     gemini_cost_usd: geminiCost.cost_usd,
     gemini_cost_thb: geminiCost.cost_thb,
     dfs_keywords_called: dfsCalled,
+    dfs_kd_keywords_called: dfsKdCalled,
     dfs_cost_usd: dfsCostUsd,
     dfs_cost_thb: dfsCostThb,
+    dfs_kd_cost_usd: dfsKdCostUsd,
+    dfs_kd_cost_thb: dfsKdCostThb,
     kp_keywords_fetched: plannerCount,
     kp_cost_usd: 0,
     kp_cost_thb: 0,
@@ -1721,14 +2069,55 @@ export async function runWordGodPipeline(input: PipelineInput): Promise<Pipeline
     total_cost_thb: totalCostThb,
   };
 
+  const planPrimaryKeywords = attachSupportingSuggestions(final, lang);
+  const supportingOnlyCount = final.length - planPrimaryKeywords.length;
+  if (supportingOnlyCount > 0) {
+    warnings.push(`${supportingOnlyCount} Keyword suggestions were kept as Secondary Keywords and were not scheduled as Primary Keywords`);
+  }
+
+  const plan = input.mode === 'full_plan'
+    ? buildContentPlan(planPrimaryKeywords, clusters, {
+        mode: 'full_plan',
+        months: Math.min(Math.max(input.planMonths ?? 12, 1), 12),
+        articlesPerMonth: Math.min(Math.max(input.articlesPerMonth ?? 12, 1), 50),
+        startMonth: input.planStartMonth || new Date().toISOString().slice(0, 7),
+        niche: input.niche,
+        siteUrl: input.site_url,
+        pillars: input.planPillars,
+      })
+    : undefined;
+
+  if (plan) {
+    const itemLookup = new Map(plan.contentItems.map(item => [normalize(item.primaryKeyword), item]));
+    for (const keyword of final) {
+      const item = itemLookup.get(normalize(keyword.keyword));
+      if (!item) continue;
+      keyword.parent_topic = item.pillar;
+      keyword.internal_link_target = item.moneyPage || item.internalLinks[0];
+      keyword.suggested_anchor_text = item.suggestedAnchorText;
+    }
+    warnings.push(...plan.qa.warnings.map(warning => `Content plan: ${warning}`));
+  }
+
+  const finalSources = summarizeMetricSources(final);
+
   return {
     keywords: final,
     clusters,
+    plan,
     meta: {
       total: final.length,
-      planner_count: plannerCount,
-      dataforseo_count: dfsCount,
-      gemini_count: geminiCount,
+      requested_count: input.targetCount,
+      candidate_count: candidateCount,
+      metric_mode: metricMode,
+      api_backed_count: finalSources.apiBacked,
+      derived_count: finalSources.derived,
+      estimated_count: finalSources.estimated,
+      shortfall_count: Math.max(input.targetCount - final.length, 0),
+      cpc_currency: 'THB',
+      planner_count: finalSources.planner,
+      dataforseo_count: finalSources.dataForSeo,
+      gemini_count: finalSources.estimated,
       title_ai_count: titleMap.size,
       fallback_title_count: fallbackCount,
       cluster_count: clusters.clusters.length,

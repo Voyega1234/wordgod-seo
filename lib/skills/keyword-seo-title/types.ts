@@ -103,8 +103,13 @@ export interface EnrichedKeyword {
   // Google Ads extra fields (undefined when not from API)
   competition?: string;          // LOW | MEDIUM | HIGH | UNSPECIFIED
   competition_index?: number;    // 0–100
-  low_cpc?: number;              // in local currency (converted from micros)
+  low_cpc?: number;              // always THB
   high_cpc?: number;
+  cpc_currency?: 'THB';
+  cpc_original_currency?: string;
+  cpc_to_thb_rate?: number;
+  cpc_rate_as_of?: string;
+  cpc_rate_source?: string;
   monthly_trend?: number[];      // last 12 months avg monthly searches
 }
 
@@ -120,8 +125,11 @@ export interface SimpleRow {
 export interface FullRow extends SimpleRow {
   'Competition': string;
   'Competition Index': number | string;
-  'Low CPC': number | string;
-  'High CPC': number | string;
+  'Low CPC (THB)': number | string;
+  'High CPC (THB)': number | string;
+  'CPC Original Currency': string;
+  'CPC to THB Rate': number | string;
+  'CPC FX As Of': string;
   'Intent': string;
   'Keyword Type': string;
   'Priority': string;
@@ -186,8 +194,13 @@ export interface KeywordPlannerRow {
   volume: number;             // avg_monthly_searches as integer
   competition: string;        // LOW | MEDIUM | HIGH | UNSPECIFIED
   competition_index: number;  // 0–100
-  low_cpc: number;            // micros / 1_000_000
+  low_cpc: number;            // converted to THB; 0 when conversion is unavailable
   high_cpc: number;
+  cpc_currency: 'THB';
+  cpc_original_currency: string;
+  cpc_to_thb_rate?: number;
+  cpc_rate_as_of?: string;
+  cpc_rate_source?: string;
   monthly_trend: number[];
   source: 'google_keyword_planner_api';
 }
@@ -198,4 +211,5 @@ export interface KeywordPlannerResult {
   error?: string;
   cached?: boolean;
   cached_at?: string;
+  warnings?: string[];
 }

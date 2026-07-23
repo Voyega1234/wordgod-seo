@@ -71,6 +71,11 @@ function mapPlannerRowsToInternal(rows: KeywordPlannerRow[]): Array<any> {
     _competition_index: r.competition_index,
     _low_cpc: r.low_cpc,
     _high_cpc: r.high_cpc,
+    _cpc_currency: r.cpc_currency,
+    _cpc_original_currency: r.cpc_original_currency,
+    _cpc_to_thb_rate: r.cpc_to_thb_rate,
+    _cpc_rate_as_of: r.cpc_rate_as_of,
+    _cpc_rate_source: r.cpc_rate_source,
     _monthly_trend: r.monthly_trend,
   }));
 }
@@ -112,6 +117,11 @@ function enrichRows(rawRows: any[], ctx: BusinessContext): EnrichedKeyword[] {
       competition_index: row._competition_index,
       low_cpc: row._low_cpc,
       high_cpc: row._high_cpc,
+      cpc_currency: row._cpc_currency,
+      cpc_original_currency: row._cpc_original_currency,
+      cpc_to_thb_rate: row._cpc_to_thb_rate,
+      cpc_rate_as_of: row._cpc_rate_as_of,
+      cpc_rate_source: row._cpc_rate_source,
       monthly_trend: row._monthly_trend,
     } as EnrichedKeyword;
   });

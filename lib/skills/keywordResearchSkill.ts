@@ -1,5 +1,6 @@
 import type { IntentRatio } from './intentRatioSkill';
 import { buildIntentPromptSection, DEFAULT_RATIO } from './intentRatioSkill';
+import { countWords } from '../text/thai';
 
 export type { IntentRatio };
 
@@ -48,21 +49,20 @@ These are forum/social sites — we cannot rank for them, they must not appear a
 
 const KEYWORD_RESEARCH_SKILL_STANDARD = KEYWORD_RESEARCH_SKILL_BASE + `
 ### Priority Targets (Standard Mode)
-1. Long-tail keywords (3-5 words Thai)
-2. Question-based: "อะไรคือ", "วิธี", "ทำไม", "ดีไหม"
+1. Search-demand anchors: concise 1-4 word phrases that Keyword Planner can measure directly
+2. Medium-tail commercial and problem phrases (2-4 words Thai)
 3. Comparison: "เทียบ", "vs", "ดีกว่า", "ยี่ห้อไหนดี"
-4. Best-of: "ดีที่สุด", "แนะนำ", "รีวิว"
-5. Transactional: "ราคา", "ซื้อ", "บริการ", "ติดต่อ", "รับทำ"
+4. Transactional: "ราคา", "ซื้อ", "บริการ", "ติดต่อ", "รับทำ"
+5. Question-based long-tail phrases only as supporting ideas, not the majority
 `;
 
 const KEYWORD_RESEARCH_SKILL_KNOWLEDGE = KEYWORD_RESEARCH_SKILL_BASE + `
 ### Priority Targets (Knowledge Mode)
-1. Long-tail educational keywords (3-5 words Thai)
+1. Concise educational topic phrases (1-4 words Thai) with measurable search demand
 2. Definition/explanation: "คืออะไร", "หมายถึง", "คือ"
-3. How-it-works: "ทำงานอย่างไร", "ทำงานยังไง", "ทำอย่างไร"
-4. Concept comparison: "ต่างกันอย่างไร", "เหมือนกันอย่างไร"
-5. Process/checklist: "ขั้นตอน", "เช็กลิสต์", "ข้อควรรู้", "ต้องใช้อะไรบ้าง"
-6. FAQ-style: "ทำไม", "เมื่อไหร่", "ใครควร"
+3. Concept comparison: "ต่างกันอย่างไร", "เหมือนกันอย่างไร"
+4. Process/checklist: "ขั้นตอน", "เช็กลิสต์", "ข้อควรรู้"
+5. How-it-works and FAQ long-tail phrases only as supporting ideas
 
 ### HARD FORBIDDEN in Knowledge Mode
 NEVER generate keywords that contain or imply:
@@ -133,7 +133,7 @@ Only use high-volume generic terms if they also connect to a real problem above.
 
 export function detectTopicClusterRole(keyword: string, intent: string): TopicClusterRole {
   const kw = keyword.toLowerCase();
-  const words = kw.trim().split(/\s+/).length;
+  const words = countWords(kw, /[\u0E00-\u0E7F]/.test(kw) ? 'th' : 'en');
 
   // Troubleshooting
   if (/ปัญหา|error|ไม่ทำงาน|แก้ไข|วิธีแก้|ค้าง|ขึ้น error|ซ่อม/.test(kw)) return 'troubleshooting';
@@ -204,10 +204,11 @@ ${excludeSection}
 2. Generate exactly ${count} keywords that are NOT in the Exclude List above
 3. Each keyword must be unique in topic/angle — no near-duplicates
 4. STRICTLY follow the intent distribution above — do NOT over-produce any single intent
-5. Vary lengths: mix short-tail (1-2 words) and long-tail (3-6 words)
-6. For each keyword estimate: volume, competition, opportunity, intent, content type
-7. For each keyword, classify its topic cluster role and journey stage
-8. Search Volume is a SUPPORTING signal only — do not rank keywords by volume alone
+5. At least 75% of results must be concise short/medium phrases of 1-4 words; at most 25% may be 5+ word long-tail supporting ideas
+6. Do not turn a complete customer question into the Primary Keyword when a shorter phrase preserves the same search intent
+7. For each keyword estimate: volume, competition, opportunity, intent, content type
+8. For each keyword, classify its topic cluster role and journey stage
+9. Search Volume is a SUPPORTING signal only — do not rank keywords by volume alone
 
 ### Volume Estimation Rules (CRITICAL — must be realistic)
 Use Google Search grounding to estimate Thai monthly search volume as accurately as possible:

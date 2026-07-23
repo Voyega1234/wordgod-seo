@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { processRow } from '@/lib/processor';
+import { authorizeApiRequest } from '@/lib/auth/access';
 
 export const maxDuration = 800;
 
 export async function POST(req: NextRequest) {
+  const denied = await authorizeApiRequest(req);
+  if (denied) return denied;
+
   const { rows, niche, keywordCount, excludeKeywords } = await req.json();
 
   if (!rows || !Array.isArray(rows) || rows.length === 0) {

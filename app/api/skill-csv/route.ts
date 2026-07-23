@@ -8,8 +8,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { runKeywordResearchSeoTitleSkill, runKeywordResearchSeoTitleSkillAsync } from '@/lib/skills/keyword-seo-title';
 import type { SkillInput } from '@/lib/skills/keyword-seo-title';
+import { authorizeApiRequest } from '@/lib/auth/access';
 
 export async function POST(req: NextRequest) {
+  const denied = await authorizeApiRequest(req);
+  if (denied) return denied;
+
   try {
     const input: SkillInput = await req.json();
 

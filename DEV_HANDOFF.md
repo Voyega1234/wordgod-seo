@@ -15,7 +15,7 @@
   - **API + คำแนะนำ (`api_first`)** — เติม Keyword ให้ใกล้จำนวนเป้าหมาย แต่คำที่ไม่มี Metric ตรงจะเว้น Volume/CPC ว่าง
 - Login ใช้ Supabase Email Magic Link และอนุญาตเฉพาะอีเมลที่ลงท้ายตรงกับ `@convertcake.com`
 - หน้าและ API ที่ป้องกันไว้ตรวจ JWT claims ฝั่ง Server ไม่ได้เชื่อ `hd` จากหน้า Login เป็นตัวตัดสินสิทธิ์
-- หากยังไม่ตั้ง Supabase ระบบใช้ Basic Auth เดิมได้; Production จะปิดการเข้าใช้ (HTTP 503) ถ้าไม่มีทั้ง Supabase และ `AUTH_PASSWORD`
+- Production จะปิดการเข้าใช้ (HTTP 503) หากยังตั้ง Supabase variables ไม่ครบ
 - Reference output ที่ผู้ใช้ต้องการอยู่ใน ZIP ชื่อ `LINE_BK_Keyword_Research_Content_Plan.xlsx`
 - CPC ถูกบังคับเป็น THB ทั้งระบบ ไม่มีตัวเลือกเปลี่ยนสกุลเงิน
 
@@ -80,7 +80,6 @@ NEXT_PUBLIC_SUPABASE_URL=https://SUPABASE_PROJECT_REF.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 ```
 
-6. เก็บ `AUTH_PASSWORD` ไว้เป็น fallback จนกว่าจะทดสอบ Supabase Login ผ่านครบ แล้วค่อยตัดสินใจว่าจะคงไว้หรือถอดออก
 
 > อย่านำ Supabase Project อื่นมาใช้โดยอัตโนมัติ ต้องให้เจ้าของยืนยันชื่อและ Project Ref ของ WordGod ก่อน เพราะอาจเป็นฐานของระบบอื่น โดย `kanokphonthbb-web's Project` อยู่ในรายการห้ามแตะอย่างเด็ดขาด
 
@@ -133,7 +132,7 @@ DATAFORSEO_PASSWORD
 - ใส่ Environment Variables ตาม `.env.example` และข้อด้านบน
 - ตรวจว่า Vercel plan/runtime รองรับ `maxDuration = 800` สำหรับ `/api/pipeline` และ `/api/research`; ถ้าไม่รองรับ ต้องปรับ pipeline เป็น background job/queue หรือจำกัดขนาดงาน ไม่ควรลด timeout โดยไม่ทดสอบงาน 3,000 Keyword
 - Domain Production ต้องตรงกับ Supabase Site URL และ Redirect URL
-- ยังไม่ควร Deploy Production ถ้าไม่มี Supabase vars และไม่มี `AUTH_PASSWORD` เพราะระบบจะ Fail Closed
+- ยังไม่ควร Deploy Production ถ้าไม่มี Supabase vars เพราะระบบจะ Fail Closed
 
 ### 7. รัน Automated Checks
 

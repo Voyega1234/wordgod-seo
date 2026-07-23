@@ -5,7 +5,7 @@ import { authorizeApiRequest } from '@/lib/auth/access';
 export const maxDuration = 800;
 
 export async function POST(req: NextRequest) {
-  const denied = await authorizeApiRequest(req);
+  const denied = await authorizeApiRequest();
   if (denied) return denied;
 
   const { rows, niche, keywordCount, excludeKeywords } = await req.json();

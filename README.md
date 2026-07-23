@@ -36,7 +36,7 @@ npm run dev
 
 เปิด `http://localhost:3030`
 
-หากยังไม่กำหนด Supabase variables ระบบจะใช้ Basic Auth เดิมจาก `AUTH_USERNAME` / `AUTH_PASSWORD` โดยอัตโนมัติ ใน Production หากไม่มีทั้ง Supabase และ `AUTH_PASSWORD` ระบบจะตอบ 503 และไม่เปิดให้เข้าใช้งาน
+ใน Production ต้องกำหนด Supabase variables ทั้งสองตัว หากตั้งค่าไม่ครบระบบจะตอบ 503 และไม่เปิดให้เข้าใช้งาน
 
 ## Supabase Auth + Email Magic Link
 

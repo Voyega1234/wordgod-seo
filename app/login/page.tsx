@@ -78,7 +78,7 @@ export default async function LoginPage({
                 <LoginButton nextPath={next} />
               ) : (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs leading-6 text-amber-900">
-                  หน้า Supabase Auth พร้อมใช้งานแล้ว ระหว่างรอใส่ URL และ Publishable Key โปรแกรมยังใช้ Basic Auth เดิมโดยอัตโนมัติ
+                  Supabase Auth ยังไม่ได้ตั้งค่า กรุณาเพิ่ม URL และ Publishable Key ก่อนเข้าสู่ระบบ
                 </div>
               )}
             </div>

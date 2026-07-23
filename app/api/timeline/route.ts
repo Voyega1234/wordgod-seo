@@ -162,7 +162,7 @@ function enforceClusterOrder(sorted: any[]): any[] {
 }
 
 export async function POST(req: NextRequest) {
-  const denied = await authorizeApiRequest(req);
+  const denied = await authorizeApiRequest();
   if (denied) return denied;
 
   const { keywords, days, startDate: rawStart } = await req.json();

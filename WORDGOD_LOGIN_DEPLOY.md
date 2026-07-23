@@ -37,8 +37,7 @@ NEXT_PUBLIC_SUPABASE_URL=https://<SUPABASE_PROJECT_REF>.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable key จาก Supabase → Project Settings → API>
 ```
 
-- ถ้าไม่ตั้ง 2 ตัวนี้ ระบบจะถอยไปใช้ Basic Auth และ production จะ fail-closed 503 (เข้าไม่ได้)
-- คง `AUTH_PASSWORD` ไว้เป็น fallback
+- ถ้าไม่ตั้ง 2 ตัวนี้ production จะ fail-closed 503 (เข้าไม่ได้)
 - **ห้ามใส่ `GEMINI_API_KEY`** — Gemini ใช้ Vercel OIDC (`GCP_*`) ตามเดิม ห้ามแก้
 
 ---

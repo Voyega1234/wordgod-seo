@@ -71,7 +71,7 @@ export default function LoginButton({ nextPath = '/' }: { nextPath?: string }) {
       </button>
       {sent ? (
         <p role="status" className="mt-3 rounded-xl bg-emerald-50 px-3 py-2.5 text-center text-xs leading-5 text-emerald-700">
-          ส่งลิงก์แล้ว กรุณาเปิดอีเมลและกดลิงก์เพื่อเข้าสู่ระบบ
+          ส่งลิงก์แล้ว กรุณาเปิดอีเมลและกดลิงก์เพื่อเข้าสู่ระบบ หากไม่พบให้ตรวจโฟลเดอร์ Spam หรือ Junk
         </p>
       ) : null}
       {error ? <p role="alert" className="mt-3 text-center text-xs leading-5 text-red-600">{error}</p> : null}

@@ -13,10 +13,10 @@ function WordGodMark() {
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; next?: string }>;
 }) {
   const supabaseEnabled = isSupabaseConfigured();
-  const { error } = await searchParams;
+  const { error, next } = await searchParams;
 
   return (
     <main className="relative grid min-h-screen place-items-center overflow-hidden bg-[#f3f7ff] px-4 py-7 sm:px-6">
@@ -75,16 +75,16 @@ export default async function LoginPage({
 
             <div className="mt-5">
               {supabaseEnabled ? (
-                <LoginButton />
+                <LoginButton nextPath={next} />
               ) : (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs leading-6 text-amber-900">
-                  หน้า Supabase Auth พร้อมใช้งานแล้ว ระหว่างรอใส่ URL และ Publishable Key โปรแกรมยังใช้ Basic Auth เดิมโดยอัตโนมัติ
+                  Supabase Auth ยังไม่ได้ตั้งค่า กรุณาเพิ่ม URL และ Publishable Key ก่อนเข้าสู่ระบบ
                 </div>
               )}
             </div>
 
             {error ? <p className="mt-4 rounded-xl bg-red-50 px-3 py-2.5 text-xs leading-5 text-red-700">เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง</p> : null}
-            <p className="mt-6 text-center text-[10px] leading-5 text-[#96a2b5]">ระบบตรวจสอบสิทธิ์จากอีเมลบนเซิร์ฟเวอร์ทุกหน้าและทุก API</p>
+            <p className="mt-6 text-center text-[10px] leading-5 text-[#96a2b5]">ไม่ต้องใช้รหัสผ่าน ระบบจะส่งลิงก์ยืนยันไปยังอีเมลของคุณ</p>
           </div>
         </div>
       </section>

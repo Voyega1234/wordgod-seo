@@ -15,12 +15,12 @@ WordGod เปลี่ยนชุดคีย์เวิร์ดให้เ
 - จัด Funnel (TOFU/MOFU/BOFU), Priority (P1/P2/P3), Money Page และ Internal Links
 - QA ตรวจ keyword/title ซ้ำ, metric ที่หาย และการเชื่อม Calendar กลับไป Keyword Master
 - ส่งออก Excel 6 ชีต: Overview, Keyword Master, Content Plan, Pillar Map, Calendar และ Calendar Summary
-- Supabase Google Auth จำกัดสิทธิ์แบบ server-side เฉพาะ `@convertcake.com`
+- Supabase Email Magic Link จำกัดสิทธิ์แบบ server-side เฉพาะ `@convertcake.com`
 
 ## Stack
 
 - Next.js 16, React 19, TypeScript, Tailwind CSS 4
-- Supabase Auth + Google OAuth
+- Supabase Auth + Email Magic Link
 - Vertex AI Gemini ผ่าน Vercel OIDC ตามระบบเดิม
 - Google Ads API v21 และ DataForSEO
 - ExcelJS สำหรับ XLSX export
@@ -36,27 +36,26 @@ npm run dev
 
 เปิด `http://localhost:3030`
 
-หากยังไม่กำหนด Supabase variables ระบบจะใช้ Basic Auth เดิมจาก `AUTH_USERNAME` / `AUTH_PASSWORD` โดยอัตโนมัติ ใน Production หากไม่มีทั้ง Supabase และ `AUTH_PASSWORD` ระบบจะตอบ 503 และไม่เปิดให้เข้าใช้งาน
+ใน Production ต้องกำหนด Supabase variables ทั้งสองตัว หากตั้งค่าไม่ครบระบบจะตอบ 503 และไม่เปิดให้เข้าใช้งาน
 
-## Supabase Auth + Google
+## Supabase Auth + Email Magic Link
 
 > **คำเตือน:** WordGod ต้องใช้ Supabase Project แยกที่เจ้าของยืนยันแล้วเท่านั้น ห้ามใช้หรือแก้ไข `kanokphonthbb-web's Project` เพราะเป็นคนละระบบ
 
 1. สร้างหรือเลือก Supabase project
-2. เปิด Google provider ใน **Authentication → Sign In / Providers → Google**
-3. นำ Google OAuth Client ID/Secret ใส่ในหน้า provider ของ Supabase
-4. ใน Google Cloud OAuth client เพิ่ม Authorized redirect URI ตามที่ Supabase แสดง ซึ่งมีรูปแบบ `https://<project-ref>.supabase.co/auth/v1/callback`
-5. ใน **Authentication → URL Configuration** ตั้ง Site URL ของ production และเพิ่ม Redirect URLs:
+2. เปิด Email provider ใน **Authentication → Sign In / Providers → Email**
+3. ตรวจว่า Email template แบบ Magic Link ใช้ `{{ .ConfirmationURL }}`
+4. ใน **Authentication → URL Configuration** ตั้ง Site URL ของ production และเพิ่ม Redirect URLs:
    - `http://localhost:3030/auth/callback`
    - `https://<your-production-domain>/auth/callback`
-6. ใส่ค่าต่อไปนี้ใน `.env.local` และ Vercel Environment Variables:
+5. ใส่ค่าต่อไปนี้ใน `.env.local` และ Vercel Environment Variables:
 
 ```text
 NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 ```
 
-ไม่ต้องใช้ `SUPABASE_SERVICE_ROLE_KEY` หรือ secret key สำหรับระบบ Auth นี้ ปุ่ม Google ส่ง `hd=convertcake.com` เพื่อช่วยเลือกบัญชี แต่สิทธิ์จริงตรวจจาก JWT claims บนเซิร์ฟเวอร์ทุก protected page และ API โดยเทียบโดเมนแบบ exact match เท่านั้น
+ไม่ต้องใช้ `SUPABASE_SERVICE_ROLE_KEY` หรือ secret key สำหรับระบบ Auth นี้ สิทธิ์จริงตรวจจาก JWT claims บนเซิร์ฟเวอร์ทุก protected page และ API โดยเทียบโดเมนแบบ exact match เท่านั้น
 
 ## API credentials เดิม
 

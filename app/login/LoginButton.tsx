@@ -1,53 +1,80 @@
 'use client';
 
-import { useState } from 'react';
+import { type FormEvent, useState } from 'react';
+import { ALLOWED_EMAIL_DOMAIN, isAllowedCorporateEmail, normalizeEmail } from '@/lib/auth/domain';
 import { createClient } from '@/lib/supabase/client';
 
-export default function LoginButton() {
+export default function LoginButton({ nextPath = '/' }: { nextPath?: string }) {
+  const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [sent, setSent] = useState(false);
 
-  async function signInWithGoogle() {
+  async function sendMagicLink(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     setLoading(true);
     setError('');
+    setSent(false);
+
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail || !isAllowedCorporateEmail(normalizedEmail)) {
+      setError(`กรุณาใช้อีเมล @${ALLOWED_EMAIL_DOMAIN}`);
+      setLoading(false);
+      return;
+    }
+
     try {
       const supabase = createClient();
-      const { error: authError } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
+      const callbackUrl = new URL('/auth/callback', window.location.origin);
+      if (nextPath !== '/') callbackUrl.searchParams.set('next', nextPath);
+
+      const { error: authError } = await supabase.auth.signInWithOtp({
+        email: normalizedEmail,
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
-          queryParams: {
-            hd: 'convertcake.com',
-            prompt: 'select_account',
-          },
+          emailRedirectTo: callbackUrl.toString(),
+          shouldCreateUser: true,
         },
       });
       if (authError) throw authError;
+      setEmail(normalizedEmail);
+      setSent(true);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'ไม่สามารถเข้าสู่ระบบได้');
+      setError(cause instanceof Error ? cause.message : 'ไม่สามารถส่งลิงก์เข้าสู่ระบบได้');
+    } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div>
+    <form onSubmit={sendMagicLink}>
+      <label htmlFor="login-email" className="mb-2 block text-xs font-bold text-[#273858]">
+        อีเมลบริษัท
+      </label>
+      <input
+        id="login-email"
+        name="email"
+        type="email"
+        autoComplete="email"
+        inputMode="email"
+        required
+        value={email}
+        onChange={(event) => setEmail(event.target.value)}
+        placeholder={`name@${ALLOWED_EMAIL_DOMAIN}`}
+        className="min-h-14 w-full rounded-2xl border border-[#cbd8ec] bg-white px-4 text-sm text-[#17233d] outline-none transition placeholder:text-[#a4afbf] focus:border-[#4b83ee] focus:ring-4 focus:ring-[#155eef]/10"
+      />
       <button
-        type="button"
-        onClick={signInWithGoogle}
+        type="submit"
         disabled={loading}
-        className="group flex min-h-14 w-full items-center justify-center gap-3 rounded-2xl bg-[#155eef] px-5 text-sm font-bold text-white shadow-[0_12px_30px_rgba(21,94,239,0.24)] transition hover:-translate-y-0.5 hover:bg-[#0d4fd8] hover:shadow-[0_16px_36px_rgba(21,94,239,0.30)] disabled:cursor-wait disabled:opacity-65"
+        className="mt-3 flex min-h-14 w-full items-center justify-center rounded-2xl bg-[#155eef] px-5 text-sm font-bold text-white shadow-[0_12px_30px_rgba(21,94,239,0.24)] transition hover:-translate-y-0.5 hover:bg-[#0d4fd8] hover:shadow-[0_16px_36px_rgba(21,94,239,0.30)] disabled:cursor-wait disabled:opacity-65"
       >
-        <span className="grid h-8 w-8 place-items-center rounded-xl bg-white shadow-sm">
-          <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4.5 w-4.5">
-            <path fill="#4285F4" d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.8h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.8 3-4.3 3-7.3Z" />
-            <path fill="#34A853" d="M12 22c2.7 0 5-.9 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1a5.8 5.8 0 0 1-5.5-4H3.2v2.6A10 10 0 0 0 12 22Z" />
-            <path fill="#FBBC05" d="M6.5 14a6 6 0 0 1 0-3.9V7.5H3.2a10 10 0 0 0 0 9.2L6.5 14Z" />
-            <path fill="#EA4335" d="M12 6c1.5 0 2.9.5 4 1.5l2.7-2.7A9 9 0 0 0 12 2a10 10 0 0 0-8.8 5.5l3.3 2.6A5.8 5.8 0 0 1 12 6Z" />
-          </svg>
-        </span>
-        <span>{loading ? 'กำลังเชื่อมต่อ Google…' : 'เข้าสู่ระบบด้วย Google'}</span>
+        {loading ? 'กำลังส่งลิงก์…' : sent ? 'ส่งลิงก์อีกครั้ง' : 'ส่งลิงก์เข้าสู่ระบบ'}
       </button>
+      {sent ? (
+        <p role="status" className="mt-3 rounded-xl bg-emerald-50 px-3 py-2.5 text-center text-xs leading-5 text-emerald-700">
+          ส่งลิงก์แล้ว กรุณาเปิดอีเมลและกดลิงก์เพื่อเข้าสู่ระบบ หากไม่พบให้ตรวจโฟลเดอร์ Spam หรือ Junk
+        </p>
+      ) : null}
       {error ? <p role="alert" className="mt-3 text-center text-xs leading-5 text-red-600">{error}</p> : null}
-    </div>
+    </form>
   );
 }

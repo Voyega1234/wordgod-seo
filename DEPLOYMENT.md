@@ -50,31 +50,25 @@ Alternatively, configure the provider's allowed audience as
 
 > **Isolation rule:** Create or use only a Supabase project explicitly approved for WordGod. Never use or modify `kanokphonthbb-web's Project`; it belongs to a different system. Do not copy its URL/keys or change its Auth, Database, redirect URLs, providers, or settings.
 
-1. Enable the Google provider in **Supabase Dashboard -> Authentication -> Sign In / Providers**.
-2. Add the Google OAuth Client ID and Secret to the Supabase provider.
-3. Add Supabase's provider callback URL to the Google OAuth client's authorized redirect URIs:
-
-```text
-https://SUPABASE_PROJECT_REF.supabase.co/auth/v1/callback
-```
-
-4. In **Supabase Dashboard -> Authentication -> URL Configuration**, set the production Site URL and add:
+1. Enable the Email provider in **Supabase Dashboard -> Authentication -> Sign In / Providers**.
+2. Keep the Magic Link email template configured with `{{ .ConfirmationURL }}`.
+3. In **Supabase Dashboard -> Authentication -> URL Configuration**, set the production Site URL and add:
 
 ```text
 http://localhost:3030/auth/callback
 https://YOUR_PRODUCTION_DOMAIN/auth/callback
 ```
 
-5. Add these variables locally and in Vercel:
+4. Add these variables locally and in Vercel:
 
 ```text
 NEXT_PUBLIC_SUPABASE_URL
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 ```
 
-No Supabase service-role or secret key is required. WordGod validates the signed JWT and compares the email domain exactly to `convertcake.com` on every protected page and API route. The Google `hd` parameter is only an account-selection hint and is not used as the authorization decision.
+No Supabase service-role or secret key is required. WordGod validates the signed JWT and compares the email domain exactly to `convertcake.com` on every protected page and API route.
 
-If these two variables are not present, WordGod retains the existing Basic Auth boundary using `AUTH_USERNAME` and `AUTH_PASSWORD`. Production fails closed with HTTP 503 when neither Supabase nor `AUTH_PASSWORD` is configured.
+If these two variables are not present, WordGod fails closed with HTTP 503 in production.
 
 ## 4. Configure Vercel
 
@@ -88,13 +82,11 @@ GCP_WORKLOAD_IDENTITY_POOL_ID
 GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID
 GCP_AUDIENCE
 GCP_LOCATION=global
-AUTH_PASSWORD
 NEXT_PUBLIC_SUPABASE_URL
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 ```
 
-Keep `AUTH_PASSWORD` configured as a safe fallback. Add the optional
-DataForSEO and Google Ads variables from `.env.example` only when those
+Add the optional DataForSEO and Google Ads variables from `.env.example` only when those
 integrations are needed. Do not add `GEMINI_API_KEY`.
 
 CPC output is hard-locked to THB. WordGod reads the Google Ads client

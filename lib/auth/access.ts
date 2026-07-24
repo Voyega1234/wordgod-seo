@@ -1,35 +1,9 @@
 import 'server-only';
 
-import { timingSafeEqual } from 'node:crypto';
 import { redirect } from 'next/navigation';
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { ALLOWED_EMAIL_DOMAIN, isAllowedCorporateEmail, normalizeEmail } from '@/lib/auth/domain';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/server';
-
-function safeEqual(actual: string, expected: string): boolean {
-  const actualBytes = Buffer.from(actual);
-  const expectedBytes = Buffer.from(expected);
-  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
-}
-
-function hasValidBasicAuth(req: NextRequest): boolean {
-  const expectedPassword = process.env.AUTH_PASSWORD || '';
-  if (!expectedPassword) return process.env.NODE_ENV !== 'production';
-
-  const expectedUsername = process.env.AUTH_USERNAME || 'wordgod';
-  const header = req.headers.get('authorization');
-  if (!header?.startsWith('Basic ')) return false;
-
-  try {
-    const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
-    const separator = decoded.indexOf(':');
-    if (separator < 0) return false;
-    return safeEqual(decoded.slice(0, separator), expectedUsername)
-      && safeEqual(decoded.slice(separator + 1), expectedPassword);
-  } catch {
-    return false;
-  }
-}
 
 async function getVerifiedClaims(): Promise<Record<string, unknown> | null> {
   const supabase = await createClient();
@@ -40,12 +14,11 @@ async function getVerifiedClaims(): Promise<Record<string, unknown> | null> {
 
 export { ALLOWED_EMAIL_DOMAIN, isSupabaseConfigured };
 
-export async function authorizeApiRequest(req: NextRequest): Promise<NextResponse | null> {
+export async function authorizeApiRequest(): Promise<NextResponse | null> {
   if (!isSupabaseConfigured()) {
-    if (hasValidBasicAuth(req)) return null;
     return NextResponse.json(
-      { error: 'Unauthorized' },
-      { status: 401, headers: { 'WWW-Authenticate': 'Basic realm="WordGod"' } }
+      { error: 'WordGod authentication is not configured' },
+      { status: 503 }
     );
   }
 

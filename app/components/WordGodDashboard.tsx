@@ -346,9 +346,11 @@ export default function WordGodDashboard({ authEnabled, email }: Props) {
           </div>
           <div className="flex items-center gap-3">
             {email ? <span className="hidden text-xs text-[#60756d] sm:inline">{email}</span> : null}
-            <span className={`hidden rounded-full px-2.5 py-1 text-[10px] font-bold sm:inline-flex ${authEnabled ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
-              {authEnabled ? 'Supabase Auth' : 'Basic Auth'}
-            </span>
+            {authEnabled ? (
+              <span className="hidden rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-700 sm:inline-flex">
+                Supabase Auth
+              </span>
+            ) : null}
             {authEnabled ? <SignOutButton /> : null}
           </div>
         </div>
